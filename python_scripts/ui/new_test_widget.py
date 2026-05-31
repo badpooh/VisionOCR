@@ -204,6 +204,7 @@ class NewTestWidget(QWidget):
         self._worker: NewTestWorker | None = None
         self._result_row = 0
         self._cmc256_settings: dict = {}
+        self.cb_external = QCheckBox()
         self._build_ui()
 
     # -----------------------------------------------------------------------
@@ -248,17 +249,6 @@ class NewTestWidget(QWidget):
         bar1.addWidget(self.btn_deselect_all)
         bar1.addWidget(self.btn_clear_log)
         root.addLayout(bar1)
-
-        # 2행 — 외부 소스 옵션
-        bar2 = QHBoxLayout()
-        bar2.setSpacing(6)
-        self.cb_external = QCheckBox("Use External Source (CMC256)")
-        self.btn_setup_src = QPushButton("Setup...")
-        self.btn_setup_src.clicked.connect(self._handle_setup_source)
-        bar2.addWidget(self.cb_external)
-        bar2.addWidget(self.btn_setup_src)
-        bar2.addStretch()
-        root.addLayout(bar2)
 
         # 메인 — 트리 + (결과 + 로그) splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)

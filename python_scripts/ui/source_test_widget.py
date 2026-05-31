@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime
+
+from PySide6.QtCore import QThread, Signal, Slot, Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from external.cmengine import CMEngine
+from source_test.sequence_xlsx import load_sequence, save_sequence
+from source_test.source_runner import SourceTestRunner
+
+
+class SourceTestWorker(QThread):
+    log_line = Signal(str)
+    finished_all = Signal(dict)
+
+    def __init__(self, cases: list[dict], save_dir: str, parent=None):
+        super().__init__(parent)
+        self.cases = cases
+        self.save_dir = save_dir
+        self._runner: SourceTestRunner | None = None
+
+    def stop(self):
+        if self._runner is not None:
+            self._runner.cancel()
+
+    def run(self):
+        self._runner = SourceTestRunner(
+            log_callback=lambda s: self.log_line.emit(str(s)),
+        )
+        result = self._runner.run(self.cases, self.save_dir)
+        self.finished_all.emit(result)
+
+
+class SourceTestWidget(QWidget):
+    """CMC-driven display function test tab."""
+
+    COLUMNS = [
+        ("tc_id", "TC_ID"),
+        ("name", "Test Name"),
+        ("feature", "Feature"),
+        ("settle_s", "Settle(s)"),
+        ("setup_count", "Setup"),
+        ("cmc_count", "CMC"),
+        ("nav_count", "Nav"),
+        ("expected_count", "Expected"),
+        ("notes", "Notes"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cmc = CMEngine(log_callback=self._append_log)
+        self._worker: SourceTestWorker | None = None
+        self._cases: list[dict] = []
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+
+        cmc_bar = QHBoxLayout()
+        cmc_bar.setSpacing(6)
+        self.btn_connect_cmc = QPushButton("Connect CMC")
+        self.btn_connect_cmc.setProperty("cssClass", "primary")
+        self.btn_connect_cmc.clicked.connect(self._handle_connect_cmc)
+
+        self.btn_release_cmc = QPushButton("Disconnect/Release")
+        self.btn_release_cmc.setProperty("cssClass", "danger")
+        self.btn_release_cmc.clicked.connect(self._handle_release_cmc)
+
+        self.btn_device_info = QPushButton("Device Info")
+        self.btn_device_info.clicked.connect(self._handle_device_info)
+
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.clicked.connect(self._handle_refresh)
+
+        self.lbl_cmc_status = QLabel("CMC: disconnected")
+        self.lbl_cmc_status.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+
+        cmc_bar.addWidget(self.btn_connect_cmc)
+        cmc_bar.addWidget(self.btn_release_cmc)
+        cmc_bar.addWidget(self.btn_device_info)
+        cmc_bar.addWidget(self.btn_refresh)
+        cmc_bar.addStretch()
+        cmc_bar.addWidget(self.lbl_cmc_status)
+        root.addLayout(cmc_bar)
+
+        run_bar = QHBoxLayout()
+        run_bar.setSpacing(6)
+        self.btn_start = QPushButton("START")
+        self.btn_start.setProperty("cssClass", "primary")
+        self.btn_start.clicked.connect(self._handle_start)
+
+        self.btn_stop = QPushButton("STOP")
+        self.btn_stop.setProperty("cssClass", "danger")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self._handle_stop)
+
+        self.btn_out_off = QPushButton("OUT OFF")
+        self.btn_out_off.setProperty("cssClass", "danger")
+        self.btn_out_off.clicked.connect(self._handle_out_off)
+
+        self.btn_add_step = QPushButton("Add Step")
+        self.btn_add_step.clicked.connect(self._handle_add_step)
+        self.btn_add_step.setVisible(False)
+
+        self.btn_delete_step = QPushButton("Delete Step")
+        self.btn_delete_step.clicked.connect(self._handle_delete_step)
+        self.btn_delete_step.setVisible(False)
+
+        self.btn_load = QPushButton("Load Excel")
+        self.btn_load.clicked.connect(self._handle_load_excel)
+
+        self.btn_save = QPushButton("Save Excel")
+        self.btn_save.clicked.connect(self._handle_save_excel)
+
+        self.btn_clear_log = QPushButton("Clear Log")
+        self.btn_clear_log.clicked.connect(lambda: self.log_view.clear())
+
+        run_bar.addWidget(self.btn_start)
+        run_bar.addWidget(self.btn_stop)
+        run_bar.addWidget(self.btn_out_off)
+        run_bar.addWidget(self.btn_add_step)
+        run_bar.addWidget(self.btn_delete_step)
+        run_bar.addWidget(self.btn_load)
+        run_bar.addWidget(self.btn_save)
+        run_bar.addStretch()
+        run_bar.addWidget(self.btn_clear_log)
+        root.addLayout(run_bar)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        sequence_group = QGroupBox("Functional Test Cases")
+        sequence_layout = QVBoxLayout(sequence_group)
+        sequence_layout.setContentsMargins(4, 4, 4, 4)
+        self.sequence_table = QTableWidget(0, len(self.COLUMNS))
+        self.sequence_table.setHorizontalHeaderLabels([label for _, label in self.COLUMNS])
+        self.sequence_table.setAlternatingRowColors(True)
+        self.sequence_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.sequence_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.sequence_table.verticalHeader().setVisible(False)
+        header = self.sequence_table.horizontalHeader()
+        for col in range(len(self.COLUMNS)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            self.sequence_table.setColumnWidth(col, 95)
+        header.setSectionResizeMode(len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch)
+        sequence_layout.addWidget(self.sequence_table)
+        splitter.addWidget(sequence_group)
+
+        log_group = QGroupBox("Live Log")
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(4, 4, 4, 4)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setFont(QFont("Consolas", 9))
+        self.log_view.setMaximumBlockCount(3000)
+        log_layout.addWidget(self.log_view)
+        splitter.addWidget(log_group)
+
+        splitter.setSizes([360, 220])
+        root.addWidget(splitter, 1)
+
+    def _populate_table(self, cases: list[dict]):
+        self.sequence_table.setRowCount(0)
+        for case in cases:
+            self._append_case(case)
+
+    def _append_case(self, case: dict):
+        row = self.sequence_table.rowCount()
+        self.sequence_table.insertRow(row)
+        display = dict(case)
+        display["setup_count"] = len(case.get("setup_modbus") or [])
+        display["cmc_count"] = len(case.get("cmc_outputs") or [])
+        display["nav_count"] = len(case.get("navigation") or [])
+        display["expected_count"] = len(case.get("expected") or [])
+        for col, (key, _) in enumerate(self.COLUMNS):
+            self.sequence_table.setItem(row, col, QTableWidgetItem(str(display.get(key, ""))))
+
+    def _steps_from_table(self) -> list[dict]:
+        return list(self._cases)
+
+    def _handle_connect_cmc(self):
+        try:
+            info = self._cmc.connect()
+        except Exception as e:
+            QMessageBox.critical(self, "CMC Connect Error", str(e))
+            self._set_cmc_status(False)
+            return
+        self._set_cmc_status(True, info)
+
+    def _handle_release_cmc(self):
+        self._cmc.release()
+        self._set_cmc_status(False)
+
+    def _handle_device_info(self):
+        info = self._cmc.device_info
+        if not info:
+            QMessageBox.information(self, "Device Info", "CMC is not connected.")
+            return
+        text = "\n".join(f"{k}: {v}" for k, v in info.items())
+        QMessageBox.information(self, "Device Info", text)
+
+    def _handle_refresh(self):
+        try:
+            info = self._cmc.refresh()
+        except Exception as e:
+            QMessageBox.warning(self, "CMC Refresh Error", str(e))
+            self._set_cmc_status(False)
+            return
+        self._set_cmc_status(True, info)
+        self._append_log("[cmc] refreshed")
+
+    def _handle_out_off(self):
+        try:
+            if not self._cmc.device_locked:
+                self._cmc.connect()
+            self._cmc.out_off()
+            self._set_cmc_status(True, self._cmc.device_info)
+            self._append_log("[cmc] out:off")
+        except Exception as e:
+            QMessageBox.critical(self, "OUT OFF Error", str(e))
+
+    def _handle_add_step(self):
+        return
+
+    def _handle_delete_step(self):
+        return
+
+    def _handle_load_excel(self):
+        start_dir = self._config_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Functional Test",
+            start_dir, "Excel Files (*.xlsx);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            cases = load_sequence(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", str(e))
+            return
+        self._cases = cases
+        self._populate_table(cases)
+        self._append_log(f"[ui] loaded {len(cases)} case(s) from {os.path.basename(path)}")
+
+    def _handle_save_excel(self):
+        try:
+            cases = self._steps_from_table()
+        except Exception as e:
+            QMessageBox.warning(self, "Invalid Test Plan", str(e))
+            return
+        if not cases:
+            QMessageBox.warning(self, "Empty", "Load a functional test Excel first.")
+            return
+        default_path = os.path.join(self._config_dir(), "functional_test_plan.xlsx")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Functional Test",
+            default_path, "Excel Files (*.xlsx);;All Files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            save_sequence(path, cases)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            return
+        self._append_log(f"[ui] saved {len(cases)} case(s) to {path}")
+
+    def _handle_start(self):
+        if self._worker and self._worker.isRunning():
+            QMessageBox.warning(self, "Running", "Test is already running.")
+            return
+        cases = self._steps_from_table()
+        if not cases:
+            QMessageBox.warning(self, "Empty", "Load a functional test Excel first.")
+            return
+
+        if self._cmc.device_locked:
+            self._append_log("[cmc] releasing UI lock before worker run")
+            self._cmc.release()
+            self._set_cmc_status(False)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        save_dir = os.path.join(scripts, "results", f"source_{ts}")
+        os.makedirs(save_dir, exist_ok=True)
+
+        self._append_log(f"[ui] save dir = {save_dir}")
+        self._append_log(f"[ui] running {len(cases)} case(s)")
+        self._set_running(True)
+
+        self._worker = SourceTestWorker(cases, save_dir)
+        self._worker.log_line.connect(self._append_log)
+        self._worker.finished_all.connect(self._on_finished)
+        self._worker.start()
+
+    def _handle_stop(self):
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._append_log("[ui] STOP requested")
+
+    @Slot(dict)
+    def _on_finished(self, result: dict):
+        self._set_running(False)
+        self._worker = None
+        overall = result.get("overall", "")
+        error = result.get("error", "")
+        self._append_log(f"[ui] finished: {overall}")
+        if error:
+            self._append_log(f"[ui] error: {error}")
+
+    def _set_running(self, running: bool):
+        self.btn_start.setEnabled(not running)
+        self.btn_stop.setEnabled(running)
+        self.btn_connect_cmc.setEnabled(not running)
+        self.btn_release_cmc.setEnabled(not running)
+        self.btn_refresh.setEnabled(not running)
+        self.btn_load.setEnabled(not running)
+        self.btn_save.setEnabled(not running)
+
+    def _set_cmc_status(self, connected: bool, info: dict | None = None):
+        if not connected:
+            self.lbl_cmc_status.setText("CMC: disconnected")
+            return
+        info = info or {}
+        serial = info.get("serial") or "connected"
+        ip = info.get("ip") or ""
+        self.lbl_cmc_status.setText(f"CMC: {serial} {ip}".strip())
+
+    @staticmethod
+    def _config_dir() -> str:
+        scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_dir = os.path.join(os.path.dirname(scripts), "config")
+        os.makedirs(config_dir, exist_ok=True)
+        return config_dir
+
+    @Slot(str)
+    def _append_log(self, line: str):
+        self.log_view.appendPlainText(line)
