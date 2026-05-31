@@ -6,7 +6,6 @@ from function.func_touch import TouchManager
 
 from config.a7300 import ConfigMap as ConfigMapA7300
 from config.a3700n import ConfigMap as ConfigMapA3700N
-from config.a2700 import ConfigMap as ConfigMapA2700
 from models import config as app_config
 
 
@@ -64,10 +63,17 @@ def get_setup_defaults(product):
 
 class ModbusLabels:
 
+	A2700_SETUP_UNLOCK_ADDR = 50999
+	A2700_CONTROL_UNLOCK_ADDR = 54999
+	A2700_TEST_PARAMETER_ACCESS_ADDR = 55800
+	A2700_TEST_MODE_SETUP_ADDR = 55802
+	A2700_TEST_MODE_CONTROL_ADDR = 55900
+
 	touch_manager = TouchManager()
 
 	def __init__(self):
 		self.connect_manager = ConnectionManager()
+		self.response = None
 
 	# ------------------------------------------------------------
 	# 제품별 라우팅 헬퍼
@@ -84,9 +90,47 @@ class ModbusLabels:
 		except AttributeError:
 			return False
 
+	def _is_error_response(self, response):
+		return response is None or (hasattr(response, "isError") and response.isError())
+
+	def _write_checked(self, address, value, label):
+		self.response = self.connect_manager.setup_client.write_register(address, value)
+		if self._is_error_response(self.response):
+			raise RuntimeError(f"{label} write failed: addr={address}, value={value}, response={self.response}")
+		return self.response
+
+	def _unlock_a2700_remote(self):
+		if self.connect_manager.setup_client is None:
+			print("setup_client가 연결되어 있지 않습니다.")
+			return False
+		for address, values, label in (
+			(self.A2700_SETUP_UNLOCK_ADDR, [2300, 0, 700, 1], "A2700 setup unlock"),
+			(self.A2700_CONTROL_UNLOCK_ADDR, [2300, 0, 1600, 1], "A2700 control unlock"),
+		):
+			for value in values:
+				self._write_checked(address, value, label)
+				time.sleep(0.4)
+		return True
+
+	def _a2700_test_mode_setting(self, mode):
+		self.touch_manager.uitest_mode_start()
+		if not self._unlock_a2700_remote():
+			return
+		client = self.connect_manager.setup_client
+		self.response = client.read_holding_registers(self.A2700_TEST_PARAMETER_ACCESS_ADDR, count=3)
+		if self._is_error_response(self.response):
+			raise RuntimeError(f"A2700 test parameter read failed: {self.response}")
+		self._write_checked(self.A2700_TEST_MODE_SETUP_ADDR, mode, "A2700 test mode setup")
+		self._write_checked(self.A2700_TEST_PARAMETER_ACCESS_ADDR, 1, "A2700 test parameter apply")
+		self._write_checked(self.A2700_TEST_MODE_CONTROL_ADDR, mode, "A2700 test mode control")
+		print("A2700 Demo mode setting Done" if mode else "A2700 Test Mode OFF")
+
 	def test_mode_balance_setting(self):
 
 		product = self.connect_manager.PRODUCT
+		if product == "A2700":
+			self._a2700_test_mode_setting(1)
+			return
 
 		if product == "A7300":
 			self.touch_manager.uitest_mode_start()
@@ -121,28 +165,12 @@ class ModbusLabels:
 			else:
 				print("setup_client가 연결되어 있지 않습니다.")
 
-		if product == "A2700":
-			# TODO(A2700): 실기에서 Modbus Map 확인 후 전용 시퀀스로 교체.
-			# 현재 ConfigMapA2700 은 A7300 주소를 상속하므로 A7300 시퀀스를 임시 사용.
-			self.touch_manager.uitest_mode_start()
-			values = [2300, 0, 700, 1]
-			values_control = [2300, 0, 1600, 1]
-			if self.connect_manager.setup_client is not None:
-				for value in values:
-					self.response = self.connect_manager.setup_client.write_register(ConfigMapA2700.addr_setup_lock.value[0], value)
-				for value_control in values_control:
-					self.response = self.connect_manager.setup_client.write_register(ConfigMapA2700.addr_control_lock.value[0], value_control)
-					time.sleep(0.6)
-				self.response = self.connect_manager.setup_client.read_holding_registers(4000, count=3)
-				self.response = self.connect_manager.setup_client.write_register(4002, 0)
-				self.response = self.connect_manager.setup_client.write_register(4000, 1)
-				self.response = self.connect_manager.setup_client.write_register(4001, 1)
-				print("Demo mode setting Done")
-			else:
-				print("setup_client가 연결되어 있지 않습니다.")
 		return
 	
 	def test_mode_off(self):
+		if self.connect_manager.PRODUCT == "A2700":
+			self._a2700_test_mode_setting(0)
+			return
 		if not self.uses_native_modbus_ui():
 			print(f"[{self.connect_manager.PRODUCT}] test_mode_off: "
 			    	f"not applicable (bridge mode, no-op)")

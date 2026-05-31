@@ -14,7 +14,7 @@ from function.func_ocr import PaddleOCRManager
 from function.func_modbus import ModbusLabels
 from demo_test.demo_process import image_directory, get_image_directory
 from ui.setup_test_widget import SetupTestWidget
-from ui.new_test_widget import NewTestWidget
+from ui.demo_test_widget import NewTestWidget
 from ui.source_test_widget import SourceTestWidget
 
 # ---------------------------------------------------------------------------

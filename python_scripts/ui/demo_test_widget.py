@@ -410,7 +410,7 @@ class NewTestWidget(QWidget):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         here = os.path.dirname(os.path.abspath(__file__))
         scripts = os.path.dirname(here)
-        save = os.path.join(scripts, "results", f"newtest_{ts}")
+        save = os.path.join(scripts, "results", f"DemoTest_{ts}")
         os.makedirs(save, exist_ok=True)
         search = os.path.join(get_image_directory(), "**", "*.png")
 
