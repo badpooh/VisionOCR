@@ -1,0 +1,19 @@
+*.pyc
+build/
+dist/
+__pycache__/
+
+# Python 임베디드 환경 (배포 시에만 동봉)
+python_env/
+
+# 사용자 / 런타임 산출물
+settings.db
+results/
+python_scripts/results/
+python_scripts/bridge_screenshots/
+installer_output/
+
+# 백업 / IDE / 자바 시절 흔적
+*.bak.*
+.vscode/
+.gradle/

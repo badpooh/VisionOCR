@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" --version)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" --version)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle-gpu==3.0.0 -f https://www.paddlepaddle.org.cn/whl/windows/gpu/cuda11.8.html)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle-gpu==3.0.0 -f https://www.paddlepaddle.org.cn/whl/windows/gpu/cuda118.html)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle-gpu==3.0.0 -i https://pypi.tuna.tsinghua.edu.cn/simple)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle==3.0.0 --dry-run)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip uninstall paddlepaddle-gpu -y)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle==3.0.0)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddleocr==3.2.0 paddlex==3.2.0)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install torch==2.9.1 torchvision==0.24.1)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install PySide6==6.9.2 ultralytics==8.3.235 opencv-python==4.12.0.88)"
+    ]
+  }
+}

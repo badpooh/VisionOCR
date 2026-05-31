@@ -1,0 +1,32 @@
+# -*- coding: utf-8 -*-
+"""제품별 screenshot 검색 경로 헬퍼.
+
+A7300 만 펌웨어가 UNC share(\\10.10.20.30\screenshot) 에 PNG 를 떨궈주고,
+그 외 제품(A3700N, A2700, ...) 은 브릿지가 받은 bytes 를 로컬 디렉터리에
+저장한다 → get_image_directory() 로 제품에 맞춰 고른다.
+
+(과거 DemoTest / TestRunnerWorker 흐름은 NewTestWidget +
+demo_a3700n_runner 로 통합되어 제거됨. 본 모듈은 헬퍼 두 개만 보존.)
+"""
+
+from function.func_connection import ConnectionManager
+from function.func_touch import TouchManager
+from models import config as app_config
+
+
+image_directory = r"\\10.10.20.30\screenshot"
+
+
+def get_image_directory() -> str:
+    """현재 선택된 제품에 맞는 스크린샷 검색 루트 경로.
+
+    A7300 (외부소스 인가 모드) → image_directory (UNC share, 펌웨어가 직접 업로드)
+    그 외 (A3700N / A2700 / ...) → TouchManager.bridge_screenshot_dir (로컬)
+    """
+    try:
+        product = ConnectionManager().PRODUCT
+    except Exception:
+        product = None
+    if product in app_config.EXTERNAL_SOURCE_TEST_MODE_PRODUCTS:
+        return image_directory
+    return TouchManager.bridge_screenshot_dir

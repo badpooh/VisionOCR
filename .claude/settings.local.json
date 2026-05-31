@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf src/ bin/ build/ gradle/ app/ target/)",
+      "Bash(rm -f build.gradle settings.gradle gradle.properties gradlew gradlew.bat)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -c \"import PySide6; print\\(PySide6.__version__\\)\")",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -m pip install PySide6)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -c ':*)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe --version)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -m pip list --format=columns)",
+      "Bash(pip show:*)",
+      "Bash(python -c ':*)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -m pip uninstall fastapi uvicorn starlette opencv-python -y)",
+      "Bash(where iscc:*)",
+      "Read(//c/Program Files \\(x86\\)/Inno Setup 6/**)",
+      "Read(//c/Program Files/Inno Setup 6/**)",
+      "Bash(where winget:*)",
+      "Bash(where choco:*)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -m pip install ultralytics)",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -c \"import pymodbus; print\\(pymodbus.__version__\\)\")",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -c \"from pymodbus.constants import Endian\")",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe -c \"from pymodbus.payload import BinaryPayloadDecoder, Endian; print\\('OK'\\)\")",
+      "Bash(d:/rootech/AutoProgram/VisionJava/python_env/python.exe d:/rootech/AutoProgram/VisionJava/python_scripts/main.py)",
+      "Bash(kill %1)",
+      "Bash(\"c:/PNT/임시 작업공간/VisionOCR/python_env/python.exe\" -c \"import paddle; print\\('paddle:', paddle.__version__\\); import paddleocr; print\\('paddleocr:', paddleocr.__version__\\); import paddlex; print\\('paddlex:', paddlex.__version__\\)\")",
+      "Bash(\"c:/PNT/임시 작업공간/VisionOCR/python_env/python.exe\" -c \"import paddle; print\\('paddle:', paddle.__version__\\)\")",
+      "Bash(\"c:/PNT/임시 작업공간/VisionOCR/python_env/python.exe\" -c \"import pkg_resources; print\\(pkg_resources.get_distribution\\('paddleocr'\\).version\\)\")",
+      "Bash(\"c:/PNT/임시 작업공간/VisionOCR/python_env/python.exe\" -c \"import pkg_resources; print\\(pkg_resources.get_distribution\\('paddlex'\\).version\\)\")",
+      "Bash('c:/PNT/임시 작업공간/VisionOCR/python_env/python.exe' -c ':*)",
+      "Bash(\"c:/PNT/temp/VisionOCR/python_env/python.exe\" -c \"import paddle; print\\('Paddle version:', paddle.__version__\\); import paddleocr; print\\('PaddleOCR version:', paddleocr.__version__\\)\")",
+      "Bash(\"c:/PNT/temp/VisionOCR/python_env/python.exe\" -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(c:/PNT/temp/VisionOCR/python_env/python.exe -c ':*)",
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" -m pip list --format=freeze)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip list --format=freeze)",
+      "Read(//tmp/**)",
+      "Bash(\"C:/PNT/temp/VisionOCR/python_env/python.exe\" -m pip install paddlepaddle-gpu==3.0.0 paddleocr==3.2.0 paddlex==3.2.0)",
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" -m pip show paddlepaddle-gpu)",
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" -m pip install --no-deps --target=/tmp/test_paddle paddlepaddle-gpu==3.0.0)",
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" -c \"import paddle; print\\(paddle.__file__\\)\")",
+      "Bash(\"C:/PNT/AutoProgram/VisionJava/python_env/python.exe\" -m pip install paddlepaddle-gpu==3.0.0 --dry-run -v)"
+    ]
+  }
+}
