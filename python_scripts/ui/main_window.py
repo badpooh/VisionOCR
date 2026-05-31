@@ -15,6 +15,7 @@ from function.func_modbus import ModbusLabels
 from demo_test.demo_process import image_directory, get_image_directory
 from ui.setup_test_widget import SetupTestWidget
 from ui.new_test_widget import NewTestWidget
+from ui.source_test_widget import SourceTestWidget
 
 # ---------------------------------------------------------------------------
 # 스타일시트
@@ -329,8 +330,11 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.tab_widget, 1)
 
         # --- 탭: TEST (A3700N 데모 모드 + 외부소스 옵션) ---
+        self.source_test_widget = SourceTestWidget()
+        self.tab_widget.addTab(self.source_test_widget, "Test")
+
         self.new_test_widget = NewTestWidget()
-        self.tab_widget.addTab(self.new_test_widget, "TEST")
+        self.tab_widget.addTab(self.new_test_widget, "Demo Test")
 
         # --- 탭: Setup Test ---
         self.setup_test_widget = SetupTestWidget()

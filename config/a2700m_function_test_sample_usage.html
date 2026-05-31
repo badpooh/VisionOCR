@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A2700M 기능 테스트 샘플 사용 방법</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f5f7fa;
+      color: #243246;
+      font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+      line-height: 1.6;
+    }
+    header {
+      padding: 28px 36px;
+      background: #173c63;
+      color: white;
+    }
+    header h1 {
+      margin: 0 0 6px;
+      font-size: 26px;
+    }
+    header p {
+      margin: 0;
+      color: #d9e9f8;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    section {
+      background: white;
+      border: 1px solid #ccd6e2;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      padding: 20px 22px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      color: #245f9f;
+      font-size: 19px;
+    }
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+    }
+    code {
+      background: #eef3f8;
+      border-radius: 4px;
+      padding: 2px 5px;
+      font-family: Consolas, monospace;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #ccd6e2;
+      padding: 8px 9px;
+      vertical-align: top;
+    }
+    th {
+      background: #d9eaf7;
+      color: #1f4e79;
+      text-align: left;
+    }
+    .note {
+      border-left: 5px solid #2d7a4f;
+      background: #edf8f1;
+      padding: 12px 14px;
+      border-radius: 6px;
+    }
+    .warn {
+      border-left-color: #9a6b00;
+      background: #fff8df;
+    }
+    ol, ul {
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>A2700M 기능 테스트 샘플 사용 방법</h1>
+    <p>파일: <code>a2700m_function_test_sample.xlsx</code></p>
+  </header>
+  <main>
+    <section>
+      <h2>목적</h2>
+      <p>
+        이 샘플은 CMC256plus로 A2700M에 전압/전류 조건을 인가한 뒤,
+        A2700D 화면에 표시되는 계측값을 OCR로 읽어서 PASS/FAIL 판정하는 기능 테스트 양식입니다.
+      </p>
+      <div class="note">
+        CMC 출력값 자체를 검증하는 파일이 아닙니다. CMC 출력은 DUT에 주는 자극이고,
+        판정 대상은 A2700D 화면의 표시값입니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>실행 방법</h2>
+      <ol>
+        <li>앱을 실행하고 상단에서 A2700 장비 Modbus 연결을 먼저 완료합니다.</li>
+        <li><code>Test</code> 탭에서 <code>Connect CMC</code>로 CMC256plus를 연결합니다.</li>
+        <li><code>Load Excel</code>을 눌러 <code>config/a2700m_function_test_sample.xlsx</code>를 불러옵니다.</li>
+        <li>TC 목록이 표시되면 <code>START</code>를 눌러 실행합니다.</li>
+        <li>실행 결과는 <code>python_scripts/results/source_YYYYMMDD_HHMMSS</code> 폴더에 CSV와 캡처 이미지로 저장됩니다.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>시트 구성</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>시트</th>
+            <th>역할</th>
+            <th>작성 포인트</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>TestCases</code></td>
+            <td>실행할 TC 단위 정의</td>
+            <td><code>Enable</code>이 TRUE인 행만 실행됩니다.</td>
+          </tr>
+          <tr>
+            <td><code>SetupModbus</code></td>
+            <td>테스트 전 필요한 설정값을 통신으로 빠르게 write</td>
+            <td><code>Address</code>와 <code>Access Address</code>는 Modbus Map 문서 주소 기준입니다. 코드는 내부에서 -1을 적용합니다.</td>
+          </tr>
+          <tr>
+            <td><code>CMC</code></td>
+            <td>CMC256plus 출력 조건</td>
+            <td>전압, 전류, 주파수, 유지 시간을 정의합니다.</td>
+          </tr>
+          <tr>
+            <td><code>Navigation</code></td>
+            <td>A2700D 화면 이동 좌표</td>
+            <td><code>setup_test_a2700.xlsx</code>와 같은 <code>x,y; x,y</code> 형식입니다.</td>
+          </tr>
+          <tr>
+            <td><code>Expected</code></td>
+            <td>OCR 판정 기준</td>
+            <td>ROI 안에서 숫자, 단위, Required Text를 확인합니다.</td>
+          </tr>
+          <tr>
+            <td><code>Guide</code></td>
+            <td>작성 규칙 요약</td>
+            <td>파일 안에서도 규칙을 빠르게 확인할 수 있습니다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>SetupModbus 작성 규칙</h2>
+      <ul>
+        <li><code>Address</code>: <code>Accura 2700m Modbus Map.xlsx</code>에 적힌 문서 주소를 그대로 입력합니다.</li>
+        <li><code>Access Address</code>: 해당 설정 그룹의 access 주소를 입력합니다.</li>
+        <li><code>Value Type</code>: <code>uint16</code>, <code>int16</code>, <code>uint32</code>, <code>int32</code>, <code>float</code> 중 하나입니다.</li>
+        <li><code>Write Value</code>: 테스트 전에 장비에 쓸 설정값입니다.</li>
+        <li><code>Access Value</code>: 보통 <code>1</code>입니다.</li>
+      </ul>
+      <div class="note warn">
+        이 테스트의 목적은 설정 UI 자체 검증이 아니므로, 설정값이 화면에서 잘 바뀌었는지는 여기서 판정하지 않습니다.
+        필요한 사전 설정만 Modbus로 빠르게 적용합니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected 작성 규칙</h2>
+      <ul>
+        <li><code>Source Name</code>은 CMC 시트의 <code>Name</code>과 맞춰야 합니다.</li>
+        <li><code>Expected</code>는 화면에 표시되어야 하는 기대 숫자입니다.</li>
+        <li><code>Unit</code>은 <code>V</code>, <code>A</code>, <code>Hz</code>처럼 OCR에서 확인할 단위입니다.</li>
+        <li><code>Tolerance Type</code>은 <code>percent</code> 또는 <code>absolute</code>입니다.</li>
+        <li><code>roi_xy</code>는 <code>x1,y1,x2,y2</code> 형식입니다. 실제 화면 캡처 기준으로 조정해야 합니다.</li>
+        <li><code>Required Text</code>는 ROI 안에서 함께 확인할 라벨입니다. 예: <code>Va</code>, <code>Ia</code></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
