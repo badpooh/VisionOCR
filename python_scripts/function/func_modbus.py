@@ -6,6 +6,7 @@ from function.func_touch import TouchManager
 
 from config.a7300 import ConfigMap as ConfigMapA7300
 from config.a3700n import ConfigMap as ConfigMapA3700N
+from config.a2700 import ConfigMap as ConfigMapA2700
 from models import config as app_config
 
 
@@ -116,6 +117,26 @@ class ModbusLabels:
 				self.response = self.connect_manager.setup_client.write_register(4001, 0)
 				self.response = self.connect_manager.setup_client.write_register(4000, 1)
 				self.response = self.connect_manager.setup_client.write_register(8050, 1)
+				print("Demo mode setting Done")
+			else:
+				print("setup_client가 연결되어 있지 않습니다.")
+
+		if product == "A2700":
+			# TODO(A2700): 실기에서 Modbus Map 확인 후 전용 시퀀스로 교체.
+			# 현재 ConfigMapA2700 은 A7300 주소를 상속하므로 A7300 시퀀스를 임시 사용.
+			self.touch_manager.uitest_mode_start()
+			values = [2300, 0, 700, 1]
+			values_control = [2300, 0, 1600, 1]
+			if self.connect_manager.setup_client is not None:
+				for value in values:
+					self.response = self.connect_manager.setup_client.write_register(ConfigMapA2700.addr_setup_lock.value[0], value)
+				for value_control in values_control:
+					self.response = self.connect_manager.setup_client.write_register(ConfigMapA2700.addr_control_lock.value[0], value_control)
+					time.sleep(0.6)
+				self.response = self.connect_manager.setup_client.read_holding_registers(4000, count=3)
+				self.response = self.connect_manager.setup_client.write_register(4002, 0)
+				self.response = self.connect_manager.setup_client.write_register(4000, 1)
+				self.response = self.connect_manager.setup_client.write_register(4001, 1)
 				print("Demo mode setting Done")
 			else:
 				print("setup_client가 연결되어 있지 않습니다.")
