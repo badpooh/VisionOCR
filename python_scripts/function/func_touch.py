@@ -244,6 +244,25 @@ class TouchManager:
         else:
             print("Menu Touch Error: Not connected")
 
+    def button(self, keyin):
+        if self._uses_bridge():
+            product = self.connect_manager.PRODUCT
+            try:
+                io = self._device_io()
+                press = getattr(io, "button")
+            except Exception as e:
+                print(f"[{product}] button device_io error: {e}")
+                return
+            try:
+                value = int(keyin) & 0xFF
+                print(f"[{product}] button -> 0x{value:02X}")
+                press(value)
+            except Exception as e:
+                print(f"[{product}] button({keyin}) failed: {e}")
+            return
+
+        print(f"[{self.connect_manager.PRODUCT}] button not supported: keyin={keyin}")
+
     def btn_front_setup(self):
         # 브릿지 제품군은 프런트 하드키 Modbus 매핑이 없음 → 호출 무시.
         # 테스트 시나리오가 이 경로를 타면 호출부에서 명시적 좌표 touch 로
@@ -338,4 +357,3 @@ class TouchManager:
 
                 else:
                     print("input number touch error")
-

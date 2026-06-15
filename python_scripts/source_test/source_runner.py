@@ -94,7 +94,14 @@ class SourceTestRunner:
                 item for item in (case.get("expected") or [])
                 if not item.get("source_name") or item.get("source_name") == source_name
             ]
+            fixed_result = self._evaluate_fixed_text(
+                case, output, expected, image_path, ocr_with_boxes
+            )
+            if fixed_result is not None:
+                rows.append(fixed_result)
             for check in expected:
+                if check.get("expected") is None:
+                    continue
                 rows.append(self._evaluate(case, output, check, image_path, ocr_with_boxes))
 
         try:
@@ -193,6 +200,9 @@ class SourceTestRunner:
             if self.stop_event.is_set():
                 return
             self.log(f"[nav] {action.get('name')}")
+            for keyin in action.get("button_keyin") or []:
+                self.touch_manager.button(int(keyin))
+                time.sleep(0.3)
             for key in ("main_menu_xy", "side_menu_xy", "data_view_xy"):
                 for xy in action.get(key) or []:
                     self.touch_manager.touch_menu(list(xy))
@@ -223,12 +233,51 @@ class SourceTestRunner:
                 self.log(f"[ocr] failed: {e}")
         return saved_path, ocr_with_boxes
 
+    def _evaluate_fixed_text(self, case, output, expected, image_path, ocr_with_boxes):
+        required_texts = [
+            item.get("required_text")
+            for item in expected
+            if item.get("required_text")
+        ]
+        if not required_texts:
+            return None
+
+        units = {
+            str(item.get("unit")).strip()
+            for item in expected
+            if item.get("unit") is not None and str(item.get("unit")).strip()
+        }
+        ocr_tokens = [text for text, _box in ocr_with_boxes if text]
+        fixed_tokens = _fixed_text_tokens(ocr_tokens, units)
+        missing, extra = _compare_fixed_texts(fixed_tokens, required_texts)
+        ok = not missing and not extra
+        details = list(missing) + [f"[unexpected] {item}" for item in extra]
+
+        return {
+            "tc_id": case.get("tc_id"),
+            "test_name": case.get("name"),
+            "source_name": output.get("name"),
+            "check_name": "Fixed Text",
+            "expected": " | ".join(str(item) for item in required_texts),
+            "actual": "",
+            "unit": "",
+            "tolerance": "",
+            "tolerance_type": "",
+            "error": "; ".join(details),
+            "limit": "",
+            "label_ok": ok,
+            "unit_ok": True,
+            "overall": "PASS" if ok else "FAIL",
+            "ocr_text": " | ".join(fixed_tokens),
+            "image_path": image_path,
+        }
+
     def _evaluate(self, case, output, check, image_path, ocr_with_boxes) -> dict:
         roi = check.get("roi_xy")
-        tokens = [text for text, box in ocr_with_boxes if text and _inside_roi(box, roi)]
-        joined = " ".join(tokens)
         required = check.get("required_text") or ""
-        label_ok = (not required) or (required in joined)
+        tokens = _select_ocr_tokens(ocr_with_boxes, required, roi)
+        joined = " ".join(tokens)
+        label_ok = (not required) or _contains_required(joined, required)
 
         actual = _first_number(joined)
         expected = check.get("expected")
@@ -240,7 +289,7 @@ class SourceTestRunner:
                 numeric_ok = False
             else:
                 error = actual - float(expected)
-                limit = _limit(float(expected), check.get("tolerance"), check.get("tolerance_type"))
+                limit = _percent_limit(float(expected), check.get("tolerance"))
                 numeric_ok = abs(error) <= limit
 
         unit = check.get("unit") or ""
@@ -255,7 +304,7 @@ class SourceTestRunner:
             "actual": actual,
             "unit": unit,
             "tolerance": check.get("tolerance"),
-            "tolerance_type": check.get("tolerance_type"),
+            "tolerance_type": "percent",
             "error": error,
             "limit": limit,
             "label_ok": label_ok,
@@ -320,16 +369,136 @@ def _inside_roi(box, roi) -> bool:
     return roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]
 
 
+def _fixed_text_tokens(ocr_tokens: list[str], units: set[str]) -> list[str]:
+    out = []
+    for token in ocr_tokens:
+        text = str(token).strip()
+        if not text:
+            continue
+        if _is_number_token(text):
+            continue
+        if _looks_like_timestamp(text):
+            continue
+        if text in units:
+            continue
+        out.append(text)
+    return out
+
+
+def _compare_fixed_texts(ocr_tokens: list[str], required_texts: list[str]):
+    used = set()
+    missing = []
+
+    for expected in required_texts:
+        match_idx = None
+        for idx, token in enumerate(ocr_tokens):
+            if idx in used:
+                continue
+            if _contains_required(token, str(expected)):
+                match_idx = idx
+                break
+        if match_idx is None:
+            missing.append(str(expected))
+        else:
+            used.add(match_idx)
+
+    extra = []
+    for idx, token in enumerate(ocr_tokens):
+        if idx not in used:
+            extra.append(f"{token} x1")
+    return missing, extra
+
+
+def _looks_like_timestamp(text: str) -> bool:
+    value = str(text or "")
+    return bool(
+        re.search(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", value)
+        or re.search(r"\d{1,2}:\d{2}(?::\d{2})?", value)
+    )
+
+
+def _is_number_token(text: str) -> bool:
+    return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?", str(text or "").strip()))
+
+
+def _select_ocr_tokens(ocr_with_boxes, required: str, roi):
+    if required:
+        row_tokens = _tokens_on_required_row(ocr_with_boxes, required)
+        if row_tokens:
+            return row_tokens
+
+    if roi is not None:
+        return [
+            text for text, box in ocr_with_boxes
+            if text and _inside_roi(box, roi)
+        ]
+
+    return [text for text, _box in ocr_with_boxes if text]
+
+
+def _tokens_on_required_row(ocr_with_boxes, required: str) -> list[str]:
+    anchors = []
+    for text, box in ocr_with_boxes:
+        if text and _contains_required(text, required):
+            anchors.append((text, box))
+    if not anchors:
+        return []
+
+    anchor_text, anchor_box = anchors[0]
+    ay = _box_center_y(anchor_box)
+    ax1 = min(anchor_box[0], anchor_box[2])
+    anchor_h = abs(anchor_box[3] - anchor_box[1])
+    row_tol = max(24.0, anchor_h * 1.4)
+
+    row = []
+    for text, box in ocr_with_boxes:
+        if not text:
+            continue
+        cy = _box_center_y(box)
+        cx = _box_center_x(box)
+        if abs(cy - ay) <= row_tol and cx >= ax1 - 16:
+            row.append((cx, text))
+    row.sort(key=lambda item: item[0])
+
+    tokens = [text for _cx, text in row]
+    if anchor_text not in tokens:
+        tokens.insert(0, anchor_text)
+    return tokens
+
+
+def _box_center_x(box) -> float:
+    return (float(box[0]) + float(box[2])) / 2
+
+
+def _box_center_y(box) -> float:
+    return (float(box[1]) + float(box[3])) / 2
+
+
+def _contains_required(text: str, required: str) -> bool:
+    haystack = _normalize_required_text(text)
+    return any(candidate in haystack for candidate in _required_candidates(required))
+
+
+def _required_candidates(required: str) -> list[str]:
+    value = _normalize_required_text(required)
+    candidates = [value] if value else []
+    if value.startswith("v") and len(value) > 1:
+        candidates.append(value[1:])
+    return candidates
+
+
+def _normalize_required_text(text: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(text or "")).lower()
+
+
 def _first_number(text: str):
     match = re.search(r"[-+]?\d+(?:\.\d+)?", text or "")
     return float(match.group(0)) if match else None
 
 
-def _limit(expected: float, tolerance, tolerance_type: str | None):
+def _percent_limit(expected: float, tolerance):
     tol = float(tolerance or 0)
-    if (tolerance_type or "").lower().startswith("percent"):
-        return abs(expected) * tol / 100
-    return tol
+    return abs(expected) * tol / 100
 
 
 def _overall(rows: list[dict]) -> str:

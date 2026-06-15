@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 TEST_CASE_HEADERS = [
     "TC_ID", "Enable", "Test Name", "Feature", "Settle(s)", "Notes",
@@ -13,13 +15,22 @@ CMC_HEADERS = [
     "Va", "Vb", "Vc", "Ia", "Ib", "Ic", "Frequency", "Notes",
 ]
 NAV_HEADERS = [
-    "TC_ID", "Order", "Name", "main_menu_xy", "side_menu_xy",
-    "data_view_xy", "Wait(s)", "Notes",
+    "TC_ID", "Order", "Name", "button_keyin", "main_menu_xy",
+    "side_menu_xy", "data_view_xy", "Wait(s)", "Notes",
 ]
 EXPECTED_HEADERS = [
     "TC_ID", "Source Name", "Check Name", "Expected", "Unit",
-    "Tolerance Type", "Tolerance", "roi_xy", "Required Text", "Notes",
+    "Tolerance", "roi_xy", "Required Text", "Notes",
 ]
+
+BUTTON_KEYINS = {
+    "home": 0x01,
+    "setup": 0x02,
+    "event": 0x03,
+    "back": 0x04,
+    "esc": 0x04,
+    "escape": 0x04,
+}
 
 
 def load_sequence(path: str) -> list[dict]:
@@ -124,6 +135,7 @@ def save_sequence(path: str, cases: list[dict]):
                 tc_id,
                 item.get("order", ""),
                 item.get("name", ""),
+                _button_keyins_to_text(item.get("button_keyin")),
                 _xy_to_text(item.get("main_menu_xy")),
                 _xy_to_text(item.get("side_menu_xy")),
                 _xy_to_text(item.get("data_view_xy")),
@@ -137,7 +149,6 @@ def save_sequence(path: str, cases: list[dict]):
                 item.get("check_name", ""),
                 item.get("expected", ""),
                 item.get("unit", ""),
-                item.get("tolerance_type", "percent"),
                 item.get("tolerance", ""),
                 _roi_to_text(item.get("roi_xy")),
                 item.get("required_text", ""),
@@ -229,6 +240,7 @@ def _navigation_from_row(row: dict) -> dict:
         "main_menu_xy": _parse_xy_list(row.get("main_menu_xy")),
         "side_menu_xy": _parse_xy_list(row.get("side_menu_xy")),
         "data_view_xy": _parse_xy_list(row.get("data_view_xy")),
+        "button_keyin": _parse_button_keyins(row.get("button_keyin")),
         "wait_s": _float(row.get("Wait(s)"), 0),
         "notes": _text(row, "Notes"),
     }
@@ -240,7 +252,7 @@ def _expected_from_row(row: dict) -> dict:
         "check_name": _text(row, "Check Name", "Check"),
         "expected": _float(row.get("Expected"), None),
         "unit": _text(row, "Unit"),
-        "tolerance_type": _text(row, "Tolerance Type", "percent").lower(),
+        "tolerance_type": "percent",
         "tolerance": _float(row.get("Tolerance"), 0),
         "roi_xy": _parse_roi(row.get("roi_xy")),
         "required_text": _text(row, "Required Text"),
@@ -301,6 +313,26 @@ def _parse_xy_list(value) -> list[list[int]]:
     return out
 
 
+def _parse_button_keyins(value) -> list[int]:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return []
+    out = []
+    for part in re.split(r"[;,]", text):
+        token = part.strip()
+        if not token:
+            continue
+        key = re.sub(r"[\s_-]+", "", token.lower())
+        if key in BUTTON_KEYINS:
+            out.append(BUTTON_KEYINS[key])
+            continue
+        try:
+            out.append(int(token, 0))
+        except ValueError:
+            out.append(int(float(token)))
+    return out
+
+
 def _parse_roi(value):
     text = "" if value is None else str(value).strip()
     if not text:
@@ -311,6 +343,10 @@ def _parse_roi(value):
 
 def _xy_to_text(value) -> str:
     return "; ".join(f"{xy[0]}, {xy[1]}" for xy in (value or []))
+
+
+def _button_keyins_to_text(value) -> str:
+    return "; ".join(f"0x{int(keyin) & 0xFF:02X}" for keyin in (value or []))
 
 
 def _roi_to_text(value) -> str:
