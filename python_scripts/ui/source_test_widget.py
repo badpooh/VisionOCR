@@ -7,6 +7,7 @@ from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -32,10 +33,17 @@ class SourceTestWorker(QThread):
     case_status = Signal(dict)
     finished_all = Signal(dict)
 
-    def __init__(self, cases: list[dict], save_dir: str, parent=None):
+    def __init__(
+        self,
+        cases: list[dict],
+        save_dir: str,
+        table_rows: list[int],
+        parent=None,
+    ):
         super().__init__(parent)
         self.cases = cases
         self.save_dir = save_dir
+        self.table_rows = table_rows
         self._runner: SourceTestRunner | None = None
 
     def stop(self):
@@ -45,21 +53,33 @@ class SourceTestWorker(QThread):
     def run(self):
         self._runner = SourceTestRunner(
             log_callback=lambda s: self.log_line.emit(str(s)),
-            case_status_callback=lambda status: self.case_status.emit(status),
+            case_status_callback=self._emit_case_status,
         )
         result = self._runner.run(self.cases, self.save_dir)
         self.finished_all.emit(result)
+
+    def _emit_case_status(self, status: dict):
+        update = dict(status)
+        index = int(update.get("index", -1))
+        if 0 <= index < len(self.table_rows):
+            update["index"] = self.table_rows[index]
+        self.case_status.emit(update)
 
 
 class SourceTestWidget(QWidget):
     """CMC-driven display function test tab."""
 
     COLUMNS = [
+        ("selected", "Run"),
         ("tc_id", "TC_ID"),
         ("name", "Test Name"),
         ("result", "Result"),
         ("failure_summary", "Failure Summary"),
     ]
+
+    SELECT_COLUMN = 0
+    RESULT_COLUMN = 3
+    SUMMARY_COLUMN = 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -126,6 +146,16 @@ class SourceTestWidget(QWidget):
         self.btn_load = QPushButton("Load Excel")
         self.btn_load.clicked.connect(self._handle_load_excel)
 
+        self.btn_select_all = QPushButton("Select All")
+        self.btn_select_all.clicked.connect(
+            lambda: self._set_all_case_selection(True)
+        )
+
+        self.btn_clear_selection = QPushButton("Clear Selection")
+        self.btn_clear_selection.clicked.connect(
+            lambda: self._set_all_case_selection(False)
+        )
+
         self.btn_save = QPushButton("Save Excel")
         self.btn_save.clicked.connect(self._handle_save_excel)
 
@@ -138,6 +168,8 @@ class SourceTestWidget(QWidget):
         run_bar.addWidget(self.btn_add_step)
         run_bar.addWidget(self.btn_delete_step)
         run_bar.addWidget(self.btn_load)
+        run_bar.addWidget(self.btn_select_all)
+        run_bar.addWidget(self.btn_clear_selection)
         run_bar.addWidget(self.btn_save)
         run_bar.addStretch()
         run_bar.addWidget(self.btn_clear_log)
@@ -157,10 +189,11 @@ class SourceTestWidget(QWidget):
         self.sequence_table.verticalHeader().setVisible(False)
         header = self.sequence_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.sequence_table.setColumnWidth(1, 260)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.sequence_table.setColumnWidth(2, 260)
         sequence_layout.addWidget(self.sequence_table)
         splitter.addWidget(sequence_group)
 
@@ -185,18 +218,48 @@ class SourceTestWidget(QWidget):
     def _append_case(self, case: dict):
         row = self.sequence_table.rowCount()
         self.sequence_table.insertRow(row)
+        selected_checkbox = QCheckBox()
+        selected_checkbox.setChecked(True)
+        selected_checkbox.setToolTip("Run this test case")
+        checkbox_container = QWidget()
+        checkbox_layout = QHBoxLayout(checkbox_container)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        checkbox_layout.addWidget(selected_checkbox)
+        self.sequence_table.setCellWidget(
+            row, self.SELECT_COLUMN, checkbox_container
+        )
+
         display = {
             "tc_id": case.get("tc_id", ""),
             "name": case.get("name", ""),
             "result": "READY",
             "failure_summary": "",
         }
-        for col, (key, _) in enumerate(self.COLUMNS):
+        for col, (key, _) in enumerate(self.COLUMNS[1:], 1):
             self.sequence_table.setItem(row, col, QTableWidgetItem(str(display.get(key, ""))))
         self._set_case_status(row, "READY")
 
     def _steps_from_table(self) -> list[dict]:
         return list(self._cases)
+
+    def _selected_cases(self) -> list[tuple[int, dict]]:
+        selected = []
+        for row, case in enumerate(self._cases):
+            checkbox = self._case_checkbox(row)
+            if checkbox is not None and checkbox.isChecked():
+                selected.append((row, case))
+        return selected
+
+    def _case_checkbox(self, row: int) -> QCheckBox | None:
+        container = self.sequence_table.cellWidget(row, self.SELECT_COLUMN)
+        return container.findChild(QCheckBox) if container is not None else None
+
+    def _set_all_case_selection(self, checked: bool):
+        for row in range(self.sequence_table.rowCount()):
+            checkbox = self._case_checkbox(row)
+            if checkbox is not None:
+                checkbox.setChecked(checked)
 
     def _handle_connect_cmc(self):
         try:
@@ -291,10 +354,15 @@ class SourceTestWidget(QWidget):
         if self._worker and self._worker.isRunning():
             QMessageBox.warning(self, "Running", "Test is already running.")
             return
-        cases = self._steps_from_table()
-        if not cases:
+        if not self._cases:
             QMessageBox.warning(self, "Empty", "Load a functional test Excel first.")
             return
+        selected = self._selected_cases()
+        if not selected:
+            QMessageBox.warning(self, "Empty", "Select at least one test case.")
+            return
+        table_rows = [row for row, _case in selected]
+        cases = [case for _row, case in selected]
 
         if self._cmc.device_locked:
             self._append_log("[cmc] releasing UI lock before worker run")
@@ -312,7 +380,7 @@ class SourceTestWidget(QWidget):
             self._set_case_status(row, "READY")
         self._set_running(True)
 
-        self._worker = SourceTestWorker(cases, save_dir)
+        self._worker = SourceTestWorker(cases, save_dir, table_rows)
         self._worker.log_line.connect(self._append_log)
         self._worker.case_status.connect(self._on_case_status)
         self._worker.finished_all.connect(self._on_finished)
@@ -346,8 +414,8 @@ class SourceTestWidget(QWidget):
     ):
         if not 0 <= row < self.sequence_table.rowCount():
             return
-        result_item = self.sequence_table.item(row, 2)
-        summary_item = self.sequence_table.item(row, 3)
+        result_item = self.sequence_table.item(row, self.RESULT_COLUMN)
+        summary_item = self.sequence_table.item(row, self.SUMMARY_COLUMN)
         if result_item is None or summary_item is None:
             return
 
@@ -369,7 +437,13 @@ class SourceTestWidget(QWidget):
         self.btn_release_cmc.setEnabled(not running)
         self.btn_refresh.setEnabled(not running)
         self.btn_load.setEnabled(not running)
+        self.btn_select_all.setEnabled(not running)
+        self.btn_clear_selection.setEnabled(not running)
         self.btn_save.setEnabled(not running)
+        for row in range(self.sequence_table.rowCount()):
+            checkbox = self._case_checkbox(row)
+            if checkbox is not None:
+                checkbox.setEnabled(not running)
 
     def _set_cmc_status(self, connected: bool, info: dict | None = None):
         if not connected:
