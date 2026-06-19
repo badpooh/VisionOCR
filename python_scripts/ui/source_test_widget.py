@@ -29,6 +29,7 @@ from source_test.source_runner import SourceTestRunner
 
 class SourceTestWorker(QThread):
     log_line = Signal(str)
+    case_status = Signal(dict)
     finished_all = Signal(dict)
 
     def __init__(self, cases: list[dict], save_dir: str, parent=None):
@@ -44,6 +45,7 @@ class SourceTestWorker(QThread):
     def run(self):
         self._runner = SourceTestRunner(
             log_callback=lambda s: self.log_line.emit(str(s)),
+            case_status_callback=lambda status: self.case_status.emit(status),
         )
         result = self._runner.run(self.cases, self.save_dir)
         self.finished_all.emit(result)
@@ -55,13 +57,8 @@ class SourceTestWidget(QWidget):
     COLUMNS = [
         ("tc_id", "TC_ID"),
         ("name", "Test Name"),
-        ("feature", "Feature"),
-        ("settle_s", "Settle(s)"),
-        ("setup_count", "Setup"),
-        ("cmc_count", "CMC"),
-        ("nav_count", "Nav"),
-        ("expected_count", "Expected"),
-        ("notes", "Notes"),
+        ("result", "Result"),
+        ("failure_summary", "Failure Summary"),
     ]
 
     def __init__(self, parent=None):
@@ -154,14 +151,16 @@ class SourceTestWidget(QWidget):
         self.sequence_table = QTableWidget(0, len(self.COLUMNS))
         self.sequence_table.setHorizontalHeaderLabels([label for _, label in self.COLUMNS])
         self.sequence_table.setAlternatingRowColors(True)
+        self.sequence_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.sequence_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.sequence_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.sequence_table.verticalHeader().setVisible(False)
         header = self.sequence_table.horizontalHeader()
-        for col in range(len(self.COLUMNS)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            self.sequence_table.setColumnWidth(col, 95)
-        header.setSectionResizeMode(len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.sequence_table.setColumnWidth(1, 260)
         sequence_layout.addWidget(self.sequence_table)
         splitter.addWidget(sequence_group)
 
@@ -186,13 +185,15 @@ class SourceTestWidget(QWidget):
     def _append_case(self, case: dict):
         row = self.sequence_table.rowCount()
         self.sequence_table.insertRow(row)
-        display = dict(case)
-        display["setup_count"] = len(case.get("setup_modbus") or [])
-        display["cmc_count"] = len(case.get("cmc_outputs") or [])
-        display["nav_count"] = len(case.get("navigation") or [])
-        display["expected_count"] = len(case.get("expected") or [])
+        display = {
+            "tc_id": case.get("tc_id", ""),
+            "name": case.get("name", ""),
+            "result": "READY",
+            "failure_summary": "",
+        }
         for col, (key, _) in enumerate(self.COLUMNS):
             self.sequence_table.setItem(row, col, QTableWidgetItem(str(display.get(key, ""))))
+        self._set_case_status(row, "READY")
 
     def _steps_from_table(self) -> list[dict]:
         return list(self._cases)
@@ -307,10 +308,13 @@ class SourceTestWidget(QWidget):
 
         self._append_log(f"[ui] save dir = {save_dir}")
         self._append_log(f"[ui] running {len(cases)} case(s)")
+        for row in range(self.sequence_table.rowCount()):
+            self._set_case_status(row, "READY")
         self._set_running(True)
 
         self._worker = SourceTestWorker(cases, save_dir)
         self._worker.log_line.connect(self._append_log)
+        self._worker.case_status.connect(self._on_case_status)
         self._worker.finished_all.connect(self._on_finished)
         self._worker.start()
 
@@ -318,6 +322,14 @@ class SourceTestWidget(QWidget):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
             self._append_log("[ui] STOP requested")
+
+    @Slot(dict)
+    def _on_case_status(self, update: dict):
+        self._set_case_status(
+            int(update.get("index", -1)),
+            str(update.get("status") or "ERROR"),
+            str(update.get("failure_summary") or ""),
+        )
 
     @Slot(dict)
     def _on_finished(self, result: dict):
@@ -328,6 +340,27 @@ class SourceTestWidget(QWidget):
         self._append_log(f"[ui] finished: {overall}")
         if error:
             self._append_log(f"[ui] error: {error}")
+
+    def _set_case_status(
+        self, row: int, status: str, failure_summary: str = ""
+    ):
+        if not 0 <= row < self.sequence_table.rowCount():
+            return
+        result_item = self.sequence_table.item(row, 2)
+        summary_item = self.sequence_table.item(row, 3)
+        if result_item is None or summary_item is None:
+            return
+
+        result_item.setText(status)
+        result_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        summary_item.setText(failure_summary)
+
+        color = Qt.GlobalColor.darkBlue
+        if status == "PASS":
+            color = Qt.GlobalColor.darkGreen
+        elif status in ("FAIL", "ERROR"):
+            color = Qt.GlobalColor.red
+        result_item.setForeground(color)
 
     def _set_running(self, running: bool):
         self.btn_start.setEnabled(not running)

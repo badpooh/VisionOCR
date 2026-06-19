@@ -4,6 +4,7 @@ import csv
 import os
 import re
 import shutil
+import struct
 import threading
 import time
 from datetime import datetime
@@ -19,8 +20,9 @@ from function.func_touch import TouchManager
 class SourceTestRunner:
     """Runs CMC-driven display function tests."""
 
-    def __init__(self, log_callback=None):
+    def __init__(self, log_callback=None, case_status_callback=None):
         self.log = log_callback or print
+        self.case_status_callback = case_status_callback
         self.stop_event = threading.Event()
         self.cmc = CMEngine(log_callback=self.log)
         self.connect_manager = ConnectionManager()
@@ -53,7 +55,28 @@ class SourceTestRunner:
                 if self.stop_event.is_set():
                     break
                 self.log(f"[test] ({idx}/{len(cases)}) {case['tc_id']} {case['name']}")
-                rows.extend(self._run_case(case, save_dir))
+                self._report_case_status(idx - 1, case, "RUNNING")
+                try:
+                    case_rows = self._run_case(case, save_dir)
+                except Exception as exc:
+                    self._report_case_status(
+                        idx - 1, case, "ERROR", str(exc)
+                    )
+                    raise
+
+                rows.extend(case_rows)
+                if self.stop_event.is_set():
+                    self._report_case_status(
+                        idx - 1, case, "ERROR", "Stopped by user"
+                    )
+                    break
+
+                self._report_case_status(
+                    idx - 1,
+                    case,
+                    _overall(case_rows),
+                    _first_failure_summary(case_rows),
+                )
             result["overall"] = "STOPPED" if self.stop_event.is_set() else _overall(rows)
         except Exception as e:
             result["overall"] = "ERROR"
@@ -68,6 +91,18 @@ class SourceTestRunner:
             self._save_summary(save_dir, rows, result)
             self.cmc.release()
         return result
+
+    def _report_case_status(
+        self, index: int, case: dict, status: str, failure_summary: str = ""
+    ):
+        if self.case_status_callback is None:
+            return
+        self.case_status_callback({
+            "index": index,
+            "tc_id": case.get("tc_id", ""),
+            "status": status,
+            "failure_summary": failure_summary,
+        })
 
     def _run_case(self, case: dict, save_dir: str) -> list[dict]:
         rows = []
@@ -88,6 +123,7 @@ class SourceTestRunner:
             settle_s = max(float(case.get("settle_s") or 0), float(output.get("duration") or 0))
             self._wait(settle_s)
 
+            rows.extend(self._read_measurement_modbus(case, output))
             self._navigate(case.get("navigation") or [])
             image_path, ocr_with_boxes = self._capture_ocr(case, output, save_dir)
             expected = [
@@ -175,6 +211,84 @@ class SourceTestRunner:
 
         if access_addr is not None:
             client.write_register(access_addr, int(access_value) & 0xFFFF)
+
+    def _read_measurement_modbus(self, case: dict, output: dict) -> list[dict]:
+        source_name = output.get("name", "")
+        checks = [
+            item for item in (case.get("measurement_modbus") or [])
+            if not item.get("source_name") or item.get("source_name") == source_name
+        ]
+        rows = []
+        for check in checks:
+            if self.stop_event.is_set():
+                break
+            rows.append(self._read_measurement_check(case, output, check))
+        return rows
+
+    def _read_measurement_check(self, case, output, check) -> dict:
+        client = self.connect_manager.setup_client
+        doc_address = check.get("doc_address")
+        address = check.get("address")
+        value_type = check.get("value_type") or "float"
+        expected = check.get("expected")
+        actual = None
+        error = None
+        limit = None
+        overall = "ERROR"
+
+        try:
+            if client is None:
+                raise RuntimeError("setup_client is not connected")
+            if address is None:
+                raise ValueError("Address is required")
+            if expected is None:
+                raise ValueError("Expected is required")
+
+            word_count = _type_words(value_type)
+            self.log(
+                f"[measurement_modbus] {check.get('check_name')} "
+                f"doc_addr={doc_address} type={value_type}"
+            )
+            response = client.read_holding_registers(address, count=word_count)
+            if response is None or (
+                hasattr(response, "isError") and response.isError()
+            ):
+                raise RuntimeError(f"read failed: {response}")
+
+            registers = list(getattr(response, "registers", []) or [])
+            if len(registers) < word_count:
+                raise RuntimeError(
+                    f"read short: {len(registers)} < {word_count}"
+                )
+
+            actual = _decode_register_value(registers, value_type)
+            error = float(actual) - float(expected)
+            limit = _percent_limit(float(expected), check.get("tolerance"))
+            overall = "PASS" if abs(error) <= limit else "FAIL"
+        except Exception as exc:
+            error = str(exc)
+            self.log(
+                f"[measurement_modbus] {check.get('check_name')} failed: {exc}"
+            )
+
+        return {
+            "tc_id": case.get("tc_id"),
+            "test_name": case.get("name"),
+            "source_name": output.get("name"),
+            "check_name": check.get("check_name"),
+            "expected": expected,
+            "actual": actual,
+            "unit": check.get("unit") or "",
+            "tolerance": check.get("tolerance"),
+            "tolerance_type": "percent",
+            "error": error,
+            "limit": limit,
+            "label_ok": True,
+            "unit_ok": True,
+            "overall": overall,
+            "ocr_text": f"Modbus document address {doc_address}",
+            "image_path": "",
+        }
 
     @staticmethod
     def _encode_value(value, value_type: str, client) -> list[int]:
@@ -358,7 +472,27 @@ class SourceTestRunner:
 
 
 def _type_words(value_type: str) -> int:
-    return 2 if (value_type or "").lower() in ("uint32", "int32", "float") else 1
+    return 2 if (value_type or "").lower() in (
+        "uint32", "int32", "float", "float32"
+    ) else 1
+
+
+def _decode_register_value(registers: list[int], value_type: str):
+    kind = (value_type or "uint16").lower()
+    words = [int(value) & 0xFFFF for value in registers]
+
+    if kind == "uint16":
+        return words[0]
+    if kind == "int16":
+        return words[0] - 0x10000 if words[0] & 0x8000 else words[0]
+    if kind == "uint32":
+        return (words[0] << 16) | words[1]
+    if kind == "int32":
+        value = (words[0] << 16) | words[1]
+        return value - 0x100000000 if value & 0x80000000 else value
+    if kind in ("float", "float32"):
+        return struct.unpack(">f", struct.pack(">HH", words[0], words[1]))[0]
+    raise ValueError(f"unsupported value_type: {value_type}")
 
 
 def _inside_roi(box, roi) -> bool:
@@ -476,7 +610,19 @@ def _box_center_y(box) -> float:
 
 def _contains_required(text: str, required: str) -> bool:
     haystack = _normalize_required_text(text)
-    return any(candidate in haystack for candidate in _required_candidates(required))
+    words = None
+    for candidate in _required_candidates(required):
+        if candidate.isascii() and candidate.isalnum() and len(candidate) <= 3:
+            if words is None:
+                words = {
+                    _normalize_required_text(word)
+                    for word in re.findall(r"[0-9A-Za-z]+", str(text or ""))
+                }
+            if candidate in words:
+                return True
+        elif candidate in haystack:
+            return True
+    return False
 
 
 def _required_candidates(required: str) -> list[str]:
@@ -504,4 +650,37 @@ def _percent_limit(expected: float, tolerance):
 def _overall(rows: list[dict]) -> str:
     if not rows:
         return "PASS"
-    return "PASS" if all(row.get("overall") == "PASS" for row in rows) else "FAIL"
+    statuses = {row.get("overall") for row in rows}
+    if "ERROR" in statuses:
+        return "ERROR"
+    return "FAIL" if "FAIL" in statuses else "PASS"
+
+
+def _first_failure_summary(rows: list[dict]) -> str:
+    for row in rows:
+        status = row.get("overall")
+        if status not in ("FAIL", "ERROR"):
+            continue
+
+        check_name = str(row.get("check_name") or "Check")
+        error = row.get("error")
+        expected = row.get("expected")
+        actual = row.get("actual")
+
+        if status == "ERROR" and error not in (None, ""):
+            detail = str(error).split(";", 1)[0].strip()
+        elif check_name == "Fixed Text" and error not in (None, ""):
+            detail = str(error).split(";", 1)[0].strip()
+        elif row.get("label_ok") is False:
+            detail = "required text not found"
+        elif row.get("unit_ok") is False:
+            detail = f"unit {row.get('unit') or ''} not found".strip()
+        elif expected is not None:
+            actual_text = "not found" if actual is None else str(actual)
+            detail = f"expected {expected}, actual {actual_text}"
+        elif error not in (None, ""):
+            detail = str(error).split(";", 1)[0].strip()
+        else:
+            detail = status
+        return f"{check_name}: {detail}"
+    return ""

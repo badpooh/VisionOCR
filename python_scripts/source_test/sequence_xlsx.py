@@ -14,6 +14,10 @@ CMC_HEADERS = [
     "TC_ID", "Order", "Name", "Duration(s)",
     "Va", "Vb", "Vc", "Ia", "Ib", "Ic", "Frequency", "Notes",
 ]
+MEASUREMENT_MODBUS_HEADERS = [
+    "TC_ID", "Source Name", "Order", "Check Name", "Address",
+    "Value Type", "Expected", "Unit", "Tolerance", "Notes",
+]
 NAV_HEADERS = [
     "TC_ID", "Order", "Name", "button_keyin", "main_menu_xy",
     "side_menu_xy", "data_view_xy", "Wait(s)", "Notes",
@@ -42,38 +46,52 @@ def load_test_plan(path: str) -> list[dict]:
     from openpyxl import load_workbook
 
     wb = load_workbook(path, data_only=True, read_only=True)
-    cases = _read_test_cases(wb["TestCases"] if "TestCases" in wb.sheetnames else wb.active)
-    by_id = {case["tc_id"]: case for case in cases}
+    try:
+        cases = _read_test_cases(
+            wb["TestCases"] if "TestCases" in wb.sheetnames else wb.active
+        )
+        by_id = {case["tc_id"]: case for case in cases}
 
-    if "SetupModbus" in wb.sheetnames:
-        for row in _read_rows(wb["SetupModbus"]):
-            tc_id = _text(row, "TC_ID")
-            if tc_id in by_id:
-                by_id[tc_id]["setup_modbus"].append(_setup_from_row(row))
+        if "SetupModbus" in wb.sheetnames:
+            for row in _read_rows(wb["SetupModbus"]):
+                tc_id = _text(row, "TC_ID")
+                if tc_id in by_id:
+                    by_id[tc_id]["setup_modbus"].append(_setup_from_row(row))
 
-    if "CMC" in wb.sheetnames:
-        for row in _read_rows(wb["CMC"]):
-            tc_id = _text(row, "TC_ID")
-            if tc_id in by_id:
-                by_id[tc_id]["cmc_outputs"].append(_cmc_from_row(row))
+        if "CMC" in wb.sheetnames:
+            for row in _read_rows(wb["CMC"]):
+                tc_id = _text(row, "TC_ID")
+                if tc_id in by_id:
+                    by_id[tc_id]["cmc_outputs"].append(_cmc_from_row(row))
 
-    if "Navigation" in wb.sheetnames:
-        for row in _read_rows(wb["Navigation"]):
-            tc_id = _text(row, "TC_ID")
-            if tc_id in by_id:
-                by_id[tc_id]["navigation"].append(_navigation_from_row(row))
+        if "MeasurementModbus" in wb.sheetnames:
+            for row in _read_rows(wb["MeasurementModbus"]):
+                tc_id = _text(row, "TC_ID")
+                if tc_id in by_id:
+                    by_id[tc_id]["measurement_modbus"].append(
+                        _measurement_modbus_from_row(row)
+                    )
 
-    if "Expected" in wb.sheetnames:
-        for row in _read_rows(wb["Expected"]):
-            tc_id = _text(row, "TC_ID")
-            if tc_id in by_id:
-                by_id[tc_id]["expected"].append(_expected_from_row(row))
+        if "Navigation" in wb.sheetnames:
+            for row in _read_rows(wb["Navigation"]):
+                tc_id = _text(row, "TC_ID")
+                if tc_id in by_id:
+                    by_id[tc_id]["navigation"].append(_navigation_from_row(row))
 
-    for case in cases:
-        case["setup_modbus"].sort(key=lambda item: item.get("order", 0))
-        case["cmc_outputs"].sort(key=lambda item: item.get("order", 0))
-        case["navigation"].sort(key=lambda item: item.get("order", 0))
-    return [case for case in cases if case.get("enabled", True)]
+        if "Expected" in wb.sheetnames:
+            for row in _read_rows(wb["Expected"]):
+                tc_id = _text(row, "TC_ID")
+                if tc_id in by_id:
+                    by_id[tc_id]["expected"].append(_expected_from_row(row))
+
+        for case in cases:
+            case["setup_modbus"].sort(key=lambda item: item.get("order", 0))
+            case["cmc_outputs"].sort(key=lambda item: item.get("order", 0))
+            case["measurement_modbus"].sort(key=lambda item: item.get("order", 0))
+            case["navigation"].sort(key=lambda item: item.get("order", 0))
+        return [case for case in cases if case.get("enabled", True)]
+    finally:
+        wb.close()
 
 
 def save_sequence(path: str, cases: list[dict]):
@@ -88,6 +106,8 @@ def save_sequence(path: str, cases: list[dict]):
     setup.append(SETUP_HEADERS)
     cmc = wb.create_sheet("CMC")
     cmc.append(CMC_HEADERS)
+    measurement = wb.create_sheet("MeasurementModbus")
+    measurement.append(MEASUREMENT_MODBUS_HEADERS)
     nav = wb.create_sheet("Navigation")
     nav.append(NAV_HEADERS)
     exp = wb.create_sheet("Expected")
@@ -128,6 +148,19 @@ def save_sequence(path: str, cases: list[dict]):
                 item.get("ib", ""),
                 item.get("ic", ""),
                 item.get("frequency", ""),
+                item.get("notes", ""),
+            ])
+        for item in case.get("measurement_modbus", []):
+            measurement.append([
+                tc_id,
+                item.get("source_name", ""),
+                item.get("order", ""),
+                item.get("check_name", ""),
+                item.get("doc_address", ""),
+                item.get("value_type", "float"),
+                item.get("expected", ""),
+                item.get("unit", ""),
+                item.get("tolerance", ""),
                 item.get("notes", ""),
             ])
         for item in case.get("navigation", []):
@@ -176,6 +209,7 @@ def _read_test_cases(ws) -> list[dict]:
             "notes": _text(row, "Notes"),
             "setup_modbus": [],
             "cmc_outputs": [],
+            "measurement_modbus": [],
             "navigation": [],
             "expected": [],
         })
@@ -229,6 +263,22 @@ def _cmc_from_row(row: dict) -> dict:
         "ib": _float(row.get("Ib"), 0),
         "ic": _float(row.get("Ic"), 0),
         "frequency": _float(row.get("Frequency"), 60),
+        "notes": _text(row, "Notes"),
+    }
+
+
+def _measurement_modbus_from_row(row: dict) -> dict:
+    doc_addr = _int(row.get("Address"))
+    return {
+        "source_name": _text(row, "Source Name"),
+        "order": _float(row.get("Order"), 0),
+        "check_name": _text(row, "Check Name", f"Modbus {doc_addr}"),
+        "doc_address": doc_addr,
+        "address": doc_addr - 1 if doc_addr is not None else None,
+        "value_type": _text(row, "Value Type", "float").lower(),
+        "expected": _float(row.get("Expected"), None),
+        "unit": _text(row, "Unit"),
+        "tolerance": _float(row.get("Tolerance"), 0),
         "notes": _text(row, "Notes"),
     }
 
