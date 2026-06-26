@@ -25,6 +25,33 @@ class YoloManager:
         self.MODEL_PATH = self.BASE_DIR / "yolov11_model" / "det" / "test_best.pt"
         self.model = YOLO(self.MODEL_PATH)
 
+    def _yolo_settings(self, product):
+        settings = {
+            "roi": (160, 120, 790, 470),
+            "conf": 0.3,
+            "iou": 0.2,
+            "augment": True,
+            "inclusion_th": 0.80,
+            "nested_strategy": "drop_inner",
+            "outer_min_inner_count": 2,
+            "outer_min_width": 120,
+            "outer_max_height": 80,
+            "outer_max_y2": None,
+        }
+        product_settings = {
+            "A2700": {
+                "roi": (135, 90, 780, 425),
+            },
+            "A7300": {
+                "nested_strategy": "drop_outer_multi_inner",
+                "outer_min_inner_count": 1,
+                "outer_min_width": 65,
+                "outer_max_y2": 125,
+            },
+        }
+        settings.update(product_settings.get(product, {}))
+        return settings
+
     def _merge_adjacent_boxes(self, boxes, x_tolerance=-8, y_tolerance=10):
         """
         같은 줄(y_tolerance 이내)에 있고, x 거리(box.x1 - last_box.x2)가
@@ -103,10 +130,8 @@ class YoloManager:
         # 다르므로 별도 좌표 사용. 새 제품 추가 시 여기서 분기.
         from function.func_connection import ConnectionManager  # 지연 import (순환 회피)
         _product = ConnectionManager().PRODUCT
-        if _product == "A2700":
-            roi_x1, roi_y1, roi_x2, roi_y2 = (135, 90, 780, 425)
-        else:
-            roi_x1, roi_y1, roi_x2, roi_y2 = (160, 120, 790, 470)
+        settings = self._yolo_settings(_product)
+        roi_x1, roi_y1, roi_x2, roi_y2 = settings["roi"]
         roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
 
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -118,7 +143,12 @@ class YoloManager:
         model = YOLO(self.MODEL_PATH)
 
         # results = model(roi, conf=0.3, iou=0.2)
-        results = model(roi_for_yolo, conf=0.3, iou=0.2, augment=True)
+        results = model(
+            roi_for_yolo,
+            conf=settings["conf"],
+            iou=settings["iou"],
+            augment=settings["augment"],
+        )
         result = results[0]
 
         h, w, _ = roi_for_yolo.shape
@@ -147,9 +177,7 @@ class YoloManager:
             label = f"{name} {conf:.2f}"
             cv2.putText(copy_frame, label, (x1, y1 - 5), cv2.FONT_ITALIC, 0.5, (0, 0, 0), 1)
 
-        # cv2.imshow("Detected Image", copy_frame)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
+        # 최종 확인 창은 아래의 제품별 nested-box 후처리 이후 박스를 그린다.
 
         raw = []
         for box in result.boxes:
@@ -173,16 +201,20 @@ class YoloManager:
             raw.append([x1, y1, x2, y2, area, conf, name])
 
         keep = [True] * len(raw)
-        # 작은 박스 j 가 큰 박스 i 에 inclusion_th 이상 들어가면 j 제거 (큰 박스 우선).
+        # nested 박스 처리.
+        # 기본/A2700: 작은 박스 j 가 큰 박스 i 에 inclusion_th 이상 들어가면 j 제거.
+        # A7300: 큰 박스 하나가 여러 작은 텍스트 박스를 감싸면 큰 박스를 제거.
         # IoU 가 아니라 "작은 박스 면적 기준 포함 비율" — IoU NMS 가 흘려버리는
         # nested 박스(예: "Line-to-Line, 380" 안에 또 잡힌 "380")를 잡기 위함.
         # 임계값: 80% 부터 시작. 떨어지는 케이스 있으면 0.7 까지, 과제거되면 0.9.
-        inclusion_th = 0.80
+        inclusion_th = settings["inclusion_th"]
+        nested_strategy = settings["nested_strategy"]
 
         for i in range(len(raw)):
             if not keep[i]:
                 continue
             xi1, yi1, xi2, yi2, ai, ci, ni = raw[i]
+            contained = []
 
             for j in range(len(raw)):
                 if i == j or not keep[j]:
@@ -198,12 +230,40 @@ class YoloManager:
 
                 print(f"[nested] i={i}({xi1},{yi1},{xi2},{yi2}) j={j}({xj1},{yj1},{xj2},{yj2}) inter/aj={inter/aj:.2f} ai>aj={ai>aj}")
 
-                # j 가 작은 박스이고 i 안에 inclusion_th 이상 포함되면 j 제거
                 if ai > aj and inter / aj >= inclusion_th:
-                    keep[j] = False
+                    contained.append(j)
+                    if nested_strategy == "drop_inner":
+                        keep[j] = False
+
+            if nested_strategy == "drop_outer_multi_inner":
+                width = xi2 - xi1
+                height = yi2 - yi1
+                outer_max_y2 = settings["outer_max_y2"]
+                if (
+                    len(contained) >= settings["outer_min_inner_count"]
+                    and width >= settings["outer_min_width"]
+                    and height <= settings["outer_max_height"]
+                    and (outer_max_y2 is None or yi2 <= outer_max_y2)
+                ):
+                    print(
+                        f"[nested] drop outer box for {_product}: "
+                        f"i={i} inner_count={len(contained)} "
+                        f"box=({xi1},{yi1},{xi2},{yi2})"
+                    )
+                    keep[i] = False
 
         filtered = [raw[k] for k in range(len(raw)) if keep[k]]
         filtered = self._merge_adjacent_boxes(filtered)
+
+        copy_frame = roi_for_yolo.copy()
+        for x1, y1, x2, y2, area, conf, name in filtered:
+            cv2.rectangle(copy_frame, (x1, y1), (x2, y2), (0, 0, 255), 1)
+            label = f"{name} {conf:.2f}"
+            cv2.putText(copy_frame, label, (x1, y1 - 5), cv2.FONT_ITALIC, 0.5, (0, 0, 0), 1)
+
+        # cv2.imshow("Detected Image", copy_frame)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
 
         def sort_with_x_tolerance(detections, tol=5):
             # detections: (gy1, gx1, cropped_img, name)

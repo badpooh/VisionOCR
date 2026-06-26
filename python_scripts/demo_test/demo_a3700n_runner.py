@@ -425,8 +425,12 @@ class DemoModeA3700NRunner:
                 case["_reset_time"] = None
 
         for key in ("main_menu_xy", "side_menu_xy", "data_view_xy"):
-            for xy in (case.get(key) or []):
-                self.touch_manager.touch_menu(list(xy))
+            for action in (case.get(key) or []):
+                if isinstance(action, dict) and action.get("front_button"):
+                    self.touch_manager.button(action["front_button"])
+                    time.sleep(0.3)
+                    continue
+                self.touch_manager.touch_menu(list(action))
                 time.sleep(0.3)
 
         time.sleep(1.0)

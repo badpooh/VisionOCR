@@ -41,26 +41,24 @@ class Evaluation:
 
             for file_path in all_files:
                 filename = os.path.basename(file_path)
-                match = re.search(r'(\d{8}_\d{6})', filename)
-                if not match:
-                    continue
-                
                 try:
-                    timestamp_str = match.group(1)
-                    file_time = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
-                    # print(f"파일 시간: {file_time}")
-                    
-                    if file_time > start_time:
-                        candidate_files.append((file_time, file_path))
-                except ValueError:
+                    file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                except OSError:
                     continue
 
+                if file_time > start_time:
+                    candidate_files.append((file_time, file_path, filename))
+
             if candidate_files:
-                candidate_files.sort()
-                latest_image_path = candidate_files[0][1]
+                candidate_files.sort(reverse=True)
+                latest_time, latest_image_path, latest_filename = candidate_files[0]
                 
                 normalized_path = os.path.normpath(latest_image_path)
-                print("찾은 파일:", normalized_path)
+                print(
+                    "찾은 파일:",
+                    normalized_path,
+                    f"(modified={latest_time.strftime('%Y%m%d_%H%M%S')}, name={latest_filename})"
+                )
                 return normalized_path
 
             if attempt < retries - 1:

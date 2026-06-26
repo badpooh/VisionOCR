@@ -20,6 +20,20 @@ class TouchManager:
 
     connect_manager = ConnectionManager()
     hex_value = int("A5A5", 16)
+    front_button_bits = {
+        "home": 0x001,
+        "setup": 0x002,
+        "event": 0x004,
+        "back": 0x008,
+        "esc": 0x008,
+        "escape": 0x008,
+        "localremote": 0x010,
+        "faultreset": 0x020,
+        "meter": 0x040,
+        "relay": 0x080,
+        "cbon": 0x100,
+        "cboff": 0x200,
+    }
 
     # 브릿지 제품군 공용 스크린샷 저장 디렉터리. 외부에서 재지정 가능.
     bridge_screenshot_dir = _BRIDGE_SCREENSHOT_DIR_DEFAULT
@@ -245,6 +259,11 @@ class TouchManager:
             print("Menu Touch Error: Not connected")
 
     def button(self, keyin):
+        value = self._front_button_value(keyin)
+        if value is None:
+            print(f"[{self.connect_manager.PRODUCT}] unknown button: keyin={keyin}")
+            return
+
         if self._uses_bridge():
             product = self.connect_manager.PRODUCT
             try:
@@ -254,47 +273,45 @@ class TouchManager:
                 print(f"[{product}] button device_io error: {e}")
                 return
             try:
-                value = int(keyin) & 0xFF
                 print(f"[{product}] button -> 0x{value:02X}")
                 press(value)
             except Exception as e:
                 print(f"[{product}] button({keyin}) failed: {e}")
             return
 
-        print(f"[{self.connect_manager.PRODUCT}] button not supported: keyin={keyin}")
+        if self.connect_manager.touch_client:
+            print(f"[{self.connect_manager.PRODUCT}] front button -> 0x{value:03X}")
+            self.touch_write(ConfigTouch.touch_addr_setup_button_bit.value, value, delay=0.55)
+            self.touch_write(ConfigTouch.touch_addr_setup_button.value, 1, delay=0.55)
+            self.touch_write(ConfigTouch.touch_addr_setup_button.value, 0, delay=0.55)
+        else:
+            print(f"[{self.connect_manager.PRODUCT}] button not supported: keyin={keyin}")
+
+    def _front_button_value(self, keyin):
+        if isinstance(keyin, str):
+            key = "".join(ch for ch in keyin.strip().lower() if ch.isalnum())
+            if key in self.front_button_bits:
+                return self.front_button_bits[key]
+            try:
+                return int(keyin, 0)
+            except ValueError:
+                try:
+                    return int(float(keyin))
+                except ValueError:
+                    return None
+        try:
+            return int(keyin)
+        except (TypeError, ValueError):
+            return None
 
     def btn_front_setup(self):
-        # 브릿지 제품군은 프런트 하드키 Modbus 매핑이 없음 → 호출 무시.
-        # 테스트 시나리오가 이 경로를 타면 호출부에서 명시적 좌표 touch 로
-        # 대체해야 한다.
-        if self._uses_bridge():
-            print(f"[{self.connect_manager.PRODUCT}] btn_front_setup: not supported (no-op)")
-            return
-        if self.connect_manager.touch_client:
-            self.touch_write(ConfigTouch.touch_addr_setup_button.value, 0)
-            self.touch_write(ConfigTouch.touch_addr_setup_button_bit.value, 2)
-        else:
-            print("Front setup button is clicked Error")
+        self.button("setup")
 
     def btn_front_meter(self):
-        if self._uses_bridge():
-            print(f"[{self.connect_manager.PRODUCT}] btn_front_meter: not supported (no-op)")
-            return
-        if self.connect_manager.touch_client:
-            self.touch_write(ConfigTouch.touch_addr_setup_button.value, 0)
-            self.touch_write(ConfigTouch.touch_addr_setup_button_bit.value, 64)
-        else:
-            print("Front meter button is clicked Error")
+        self.button("meter")
 
     def btn_front_home(self):
-        if self._uses_bridge():
-            print(f"[{self.connect_manager.PRODUCT}] btn_front_home: not supported (no-op)")
-            return
-        if self.connect_manager.touch_client:
-            self.touch_write(ConfigTouch.touch_addr_setup_button.value, 0)
-            self.touch_write(ConfigTouch.touch_addr_setup_button_bit.value, 1)
-        else:
-            print("Front home button is clicked Error")
+        self.button("home")
 
     def input_number(self, number_str, key_type=None):
         """

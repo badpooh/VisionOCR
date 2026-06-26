@@ -6,6 +6,7 @@ vision/config/demo_test_<product>.xlsx 를 읽어서 케이스 dict 리스트로
 좌표 셀 (`*_xy`)
     "120,50"               → [(120, 50)]
     "120,50; 200,50"       → [(120, 50), (200, 50)]   (세미콜론으로 다중)
+    "home; 120,50"         → 전면 Home 버튼 후 좌표 터치
     빈 셀                  → []
 
 임계 셀 (`meas_low`, `meas_high`, `ratio_low`, `ratio_high`)
@@ -23,8 +24,33 @@ from __future__ import annotations
 import os
 
 
+_FRONT_BUTTON_ALIASES = {
+    "home": "home",
+    "setup": "setup",
+    "event": "event",
+    "back": "back",
+    "esc": "back",
+    "escape": "back",
+    "localremote": "localremote",
+    "faultreset": "faultreset",
+    "meter": "meter",
+    "relay": "relay",
+    "cbon": "cbon",
+    "cboff": "cboff",
+}
+
+
+def _normalize_nav_token(token: str) -> str:
+    return "".join(ch for ch in token.strip().lower() if ch.isalnum())
+
+
 def _parse_xy_list(s) -> list:
-    """좌표 list[(x,y)] 반환. 빈 셀이면 []."""
+    """좌표/전면 버튼 action 리스트 반환. 빈 셀이면 [].
+
+    예:
+        "100,85"           -> [(100, 85)]
+        "home; 100,85"     -> [{"front_button": "home"}, (100, 85)]
+    """
     if s is None:
         return []
     if not isinstance(s, str):
@@ -37,6 +63,13 @@ def _parse_xy_list(s) -> list:
         part = part.strip()
         if not part:
             continue
+        if "," not in part:
+            key = _normalize_nav_token(part)
+            if key in _FRONT_BUTTON_ALIASES:
+                items.append({"front_button": _FRONT_BUTTON_ALIASES[key]})
+                continue
+            raise ValueError(f"xy 항목은 'x,y' 또는 전면 버튼 이름이어야 함: {part!r}")
+
         xy = [p.strip() for p in part.split(",")]
         if len(xy) != 2:
             raise ValueError(f"xy 항목은 'x,y' 형식이어야 함: {part!r}")
