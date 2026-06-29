@@ -37,6 +37,9 @@ class YoloManager:
             "outer_min_width": 120,
             "outer_max_height": 80,
             "outer_max_y2": None,
+            "wide_noise_min_width_ratio": None,
+            "wide_noise_max_height": 80,
+            "wide_noise_max_conf": 0.70,
         }
         product_settings = {
             "A2700": {
@@ -47,6 +50,7 @@ class YoloManager:
                 "outer_min_inner_count": 1,
                 "outer_min_width": 65,
                 "outer_max_y2": 125,
+                "wide_noise_min_width_ratio": 0.85,
             },
         }
         settings.update(product_settings.get(product, {}))
@@ -249,6 +253,29 @@ class YoloManager:
                         f"[nested] drop outer box for {_product}: "
                         f"i={i} inner_count={len(contained)} "
                         f"box=({xi1},{yi1},{xi2},{yi2})"
+                    )
+                    keep[i] = False
+
+        # A7300 can occasionally classify a full table row or horizontal rule as
+        # one huge "text" box. It is much wider than real labels/values and
+        # carries low confidence, so remove it before OCR cropping.
+        wide_noise_ratio = settings.get("wide_noise_min_width_ratio")
+        if wide_noise_ratio is not None:
+            min_width = w * wide_noise_ratio
+            for i, (x1, y1, x2, y2, area, conf, name) in enumerate(raw):
+                if not keep[i]:
+                    continue
+                width = x2 - x1
+                height = y2 - y1
+                if (
+                    name == "text"
+                    and width >= min_width
+                    and height <= settings["wide_noise_max_height"]
+                    and conf <= settings["wide_noise_max_conf"]
+                ):
+                    print(
+                        f"[noise] drop wide low-conf box for {_product}: "
+                        f"i={i} conf={conf:.2f} box=({x1},{y1},{x2},{y2})"
                     )
                     keep[i] = False
 

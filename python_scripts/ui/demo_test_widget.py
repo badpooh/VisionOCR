@@ -90,7 +90,7 @@ class NewTestWorker(QThread):
                 w.writerow([
                     "#", "name", "overall",
                     "fixed_missing", "meas_pass_count",
-                    "ocr_texts", "meas_results",
+                    "ocr_texts", "meas_results", "modbus_results",
                     "ratio_results", "timestamp_results",
                     "fixed_text_expected",
                     "meas_low", "meas_high", "meas_unit",
@@ -109,6 +109,7 @@ class NewTestWorker(QThread):
                         r.get("meas_pass_count", ""),
                         " | ".join(r.get("ocr_texts") or []),
                         " | ".join(r.get("meas_results") or []),
+                        " | ".join(r.get("modbus_results") or []),
                         " | ".join(r.get("ratio_results") or []),
                         " | ".join(r.get("timestamp_results") or []),
                         ", ".join(case.get("fixed_text") or []),
@@ -446,6 +447,9 @@ class NewTestWidget(QWidget):
         for x in r.get("meas_results") or []:
             if "FAIL" in x or "mismatch" in x or "≠" in x:
                 fails.append(f"Meas: {x}")
+        for x in r.get("modbus_results") or []:
+            if "FAIL" in x or "ERROR" in x or "mismatch" in x:
+                fails.append(f"Modbus: {x}")
         for x in r.get("ratio_results") or []:
             if "FAIL" in x or "MISSING" in x or "mismatch" in x or "≠" in x:
                 fails.append(f"Ratio: {x}")

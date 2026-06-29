@@ -97,6 +97,46 @@ def _parse_num_list(s) -> list:
     return out
 
 
+def _parse_int_list(s) -> list:
+    """Semicolon-separated integer list. Blank cells return []."""
+    if s is None:
+        return []
+    if isinstance(s, bool):
+        return []
+    if isinstance(s, int):
+        return [int(s)]
+    if isinstance(s, float):
+        if s != int(s):
+            raise ValueError(f"integer value expected: {s!r}")
+        return [int(s)]
+    if not isinstance(s, str):
+        raise ValueError(f"integer list value unsupported: {type(s).__name__}={s!r}")
+    s = s.strip()
+    if not s:
+        return []
+    out = []
+    for part in s.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        out.append(int(float(part)))
+    return out
+
+
+def _parse_text_list(s) -> list:
+    """Semicolon-separated text list. A single value may apply to all entries."""
+    if s is None:
+        return []
+    if isinstance(s, str):
+        return [part.strip() for part in s.split(";") if part.strip()]
+    return [str(s).strip()]
+
+
+def _parse_int_scalar(s):
+    values = _parse_int_list(s)
+    return values[0] if values else None
+
+
 def _parse_enabled(s) -> str:
     """enabled 셀 3-state 파서 → 'enabled' / 'disabled' / 'init'.
 
@@ -214,6 +254,16 @@ def load_demo_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
             "meas_low":        _parse_num_list(record.get("meas_low")),
             "meas_high":       _parse_num_list(record.get("meas_high")),
             "meas_unit":       record.get("meas_unit"),
+            # Optional Modbus communication-value checks. Blank addresses
+            # preserve the previous OCR-only demo-test behavior.
+            "modbus_addr":     _parse_int_list(record.get("modbus_addr")),
+            "modbus_type":     _parse_text_list(record.get("modbus_type")),
+            "modbus_low":      _parse_num_list(record.get("modbus_low")),
+            "modbus_high":     _parse_num_list(record.get("modbus_high")),
+            "modbus_unit":     record.get("modbus_unit"),
+            "modbus_aggre_selection": _parse_int_scalar(
+                record.get("modbus_aggre_selection")
+            ),
             # ratio: 가운데 % / 텍스트 영역. ratio_text 가 채워졌으면 텍스트
             # 매칭, 아니면 ratio_low/high 범위. 둘 다 비면 검증 skip.
             "ratio_low":       _parse_num_list(record.get("ratio_low")),

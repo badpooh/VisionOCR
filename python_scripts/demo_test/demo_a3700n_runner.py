@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 import time
 import traceback
 from collections import Counter
@@ -66,6 +67,8 @@ def _collect_unit_hits(ocr_clean: list, target_unit: str, other_unit: str) -> li
 
     hits = []
     for idx, t in enumerate(ocr_clean):
+        if _TIMESTAMP_RE.search(str(t)):
+            continue
         v, u = _parse_numeric(t)
         if v is None:
             continue
@@ -104,6 +107,30 @@ def _extract_timestamps(ocr_texts: list):
     return out
 
 
+def _type_words(value_type: str) -> int:
+    return 2 if (value_type or "").lower() in (
+        "uint32", "int32", "float", "float32"
+    ) else 1
+
+
+def _decode_register_value(registers: list[int], value_type: str):
+    kind = (value_type or "uint16").lower()
+    words = [int(value) & 0xFFFF for value in registers]
+
+    if kind == "uint16":
+        return words[0]
+    if kind == "int16":
+        return words[0] - 0x10000 if words[0] & 0x8000 else words[0]
+    if kind == "uint32":
+        return (words[0] << 16) | words[1]
+    if kind == "int32":
+        value = (words[0] << 16) | words[1]
+        return value - 0x100000000 if value & 0x80000000 else value
+    if kind in ("float", "float32"):
+        return struct.unpack(">f", struct.pack(">HH", words[0], words[1]))[0]
+    raise ValueError(f"unsupported value_type: {value_type}")
+
+
 def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     """단일 케이스 검증.
 
@@ -127,6 +154,7 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     ocr_clean = [t.strip() for t in ocr_texts if t and t.strip()]
     # joined_norm 은 ratio_text 검증(아래 3단계)에서도 사용 — substring 매칭용.
     joined_norm = "".join(ocr_clean).replace(" ", "")
+    ratio_text_expected = set(case.get("ratio_text") or [])
 
     # 1) fixed_text — multiset 비교 (단위 토큰 / 숫자 / timestamp 자동 제외)
     text_tokens = []
@@ -136,6 +164,8 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
             continue                     # 숫자 토큰 제외
         if _TIMESTAMP_RE.search(t):
             continue                     # timestamp 토큰 제외
+        if t in ratio_text_expected:
+            continue                     # ratio text is validated separately
         text_tokens.append(t)
 
     ocr_counter = Counter(text_tokens)
@@ -334,6 +364,7 @@ class DemoModeA3700NRunner:
 
         self.touch_manager = TouchManager()
         self.modbus_label = ModbusLabels()
+        self.connect_manager = self.modbus_label.connect_manager
         self.eval_manager = Evaluation()
         self.paddleocr = PaddleOCRManager()
         self.yolo = YoloManager()
@@ -396,6 +427,93 @@ class DemoModeA3700NRunner:
 
         return results
 
+    def _read_modbus_measurements(self, case: dict) -> tuple[list[str], bool]:
+        """Read optional Modbus values from the case and check low/high ranges."""
+        addresses = list(case.get("modbus_addr") or [])
+        if not addresses:
+            return [], True
+
+        results = []
+        lows = list(case.get("modbus_low") or [])
+        highs = list(case.get("modbus_high") or [])
+        value_types = list(case.get("modbus_type") or ["float"])
+        unit = str(case.get("modbus_unit") or "").strip()
+
+        if len(lows) != len(highs):
+            return [
+                f"Modbus range mismatch: low={len(lows)} high={len(highs)}"
+            ], False
+        if not lows:
+            return ["Modbus range missing"], False
+
+        if len(lows) == 1:
+            ranges = [(lows[0], highs[0])] * len(addresses)
+        elif len(lows) == len(addresses):
+            ranges = list(zip(lows, highs))
+        else:
+            return [
+                f"Modbus range count mismatch: addr={len(addresses)} range={len(lows)}"
+            ], False
+
+        if not value_types:
+            value_types = ["float"]
+        if len(value_types) == 1:
+            value_types = value_types * len(addresses)
+        elif len(value_types) != len(addresses):
+            return [
+                f"Modbus type count mismatch: addr={len(addresses)} type={len(value_types)}"
+            ], False
+
+        client = self.connect_manager.setup_client
+        if client is None:
+            return ["Modbus ERROR: setup_client is not connected"], False
+
+        aggre_selection = case.get("modbus_aggre_selection")
+        if aggre_selection is not None and self.modbus_label.uses_native_modbus_ui():
+            try:
+                from config.a7300 import ConfigMap as ConfigMapA7300
+
+                selection = ConfigMapA7300.addr_aggregation_selection.value
+                client.read_holding_registers(**selection)
+                client.write_register(selection["address"], int(aggre_selection))
+                client.read_holding_registers(**selection)
+            except Exception as exc:
+                self.log(f"[demo runner] aggregation selection failed: {exc}")
+                return [f"Modbus aggregation ERROR: {exc}"], False
+
+        all_ok = True
+        unit_suffix = f" {unit}" if unit else ""
+        for address, value_type, (low, high) in zip(addresses, value_types, ranges):
+            if self.stop_requested:
+                break
+            try:
+                word_count = _type_words(value_type)
+                response = client.read_holding_registers(address, count=word_count)
+                if response is None or (
+                    hasattr(response, "isError") and response.isError()
+                ):
+                    raise RuntimeError(f"read failed: {response}")
+
+                registers = list(getattr(response, "registers", []) or [])
+                if len(registers) < word_count:
+                    raise RuntimeError(f"read short: {len(registers)} < {word_count}")
+
+                actual = _decode_register_value(registers, value_type)
+                ok = float(low) <= float(actual) <= float(high)
+                if not ok:
+                    all_ok = False
+                results.append(
+                    f"Modbus[{address}] {actual:.6g}{unit_suffix} -> "
+                    f"{'PASS' if ok else 'FAIL'} "
+                    f"(range {low:g}~{high:g}{unit_suffix})"
+                )
+            except Exception as exc:
+                all_ok = False
+                results.append(f"Modbus[{address}] ERROR: {exc}")
+                self.log(f"[demo runner] modbus read failed ({address}): {exc}")
+
+        return results, all_ok
+
     def _run_one(self, case: dict, base_save_path: str, search_pattern: str) -> dict:
         # is_init 케이스: setup_initialization 만 호출하고 메뉴/OCR/검증 스킵.
         # enabled 셀에 'init' 적은 케이스가 여기로 들어옴.
@@ -444,6 +562,10 @@ class DemoModeA3700NRunner:
         ocr_texts = self.paddleocr.paddleocr_basic(image=cropped)
 
         eval_res = _eval_demo_case(case, ocr_texts)
+        modbus_results, modbus_ok = self._read_modbus_measurements(case)
+        eval_res["modbus_results"] = modbus_results
+        if not modbus_ok:
+            eval_res["overall"] = "FAIL"
         eval_res["name"] = case["name"]
         eval_res["image_path"] = image_path
         eval_res["ocr_texts"] = ocr_texts
