@@ -39,6 +39,20 @@ TYPE_WORDS = {
     "float": 2,
 }
 
+PASSWORD_MHN_SEQUENCE = [
+    (150, 370),
+    (315, 250),
+    (150, 370),
+    (600, 250),
+    (600, 250),
+    (370, 250),
+    (260, 250),
+    (345, 370),
+    (425, 310),
+    (660, 200),
+    (345, 430),
+]
+
 
 def _is_inside_roi(box, roi):
     if roi is None:
@@ -69,6 +83,22 @@ class SetupRunner:
 
     def cancel(self):
         self.stop_requested = True
+
+    def _run_touch_actions(self, actions):
+        for action in actions or []:
+            if isinstance(action, dict) and action.get("front_button"):
+                self.touch_manager.button(action["front_button"])
+            else:
+                self.touch_manager.touch_menu(list(action))
+            time.sleep(0.3)
+
+    def _touch_password(self, mode):
+        mode = (mode or "M").upper()
+        if mode == "MHN":
+            self._run_touch_actions(PASSWORD_MHN_SEQUENCE)
+            return
+        self.touch_manager.touch_password()
+        time.sleep(0.3)
 
     def run(self, base_save_path: str, search_pattern: str,
             product: str = "A3700N", xlsx_path: str = None,
@@ -636,24 +666,17 @@ class SetupRunner:
 
         # 4. UI 터치 navigate
         for key in ("main_menu_xy", "side_menu_xy", "data_view_xy"):
-            for xy in (case.get(key) or []):
-                self.touch_manager.touch_menu(list(xy))
-                time.sleep(0.3)
+            self._run_touch_actions(case.get(key))
 
         # 5. password
         if case.get("password"):
-            self.touch_manager.touch_password()
-            time.sleep(0.3)
+            self._touch_password(case.get("password"))
 
         # 6. input — popup_xy 의 좌표 시퀀스를 순차 탭.
-        for xy in (case.get("popup_xy") or []):
-            self.touch_manager.touch_menu(list(xy))
-            time.sleep(0.3)
+        self._run_touch_actions(case.get("popup_xy"))
 
         # 7. apply
-        for xy in (case.get("apply_xy") or []):
-            self.touch_manager.touch_menu(list(xy))
-            time.sleep(0.3)
+        self._run_touch_actions(case.get("apply_xy"))
 
         # 8. screenshot + OCR
         time.sleep(1.0)

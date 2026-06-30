@@ -10,7 +10,7 @@ vision/config/setup_test_<product>.xlsx 를 읽어서 케이스 dict 리스트�
     value_type     "uint16" 또는 "uint16; float"  (addr_type[; access_type])
     target_value   값 (정수/실수)
     main_menu_xy / side_menu_xy / data_view_xy  메뉴 터치 좌표
-    password       TRUE 면 패스워드 입력
+    password       TRUE/M 이면 기존 0000 Enter, TRUE; MHN 이면 MHN 좌표 시퀀스
     input_type     popup/number — 사람용 메모, 코드는 분기 안 함
     popup_xy       다중 좌표 — popup 옵션 또는 number 입력의 digit 좌표 시퀀스
     apply_xy       단일 좌표
@@ -151,6 +151,38 @@ def _parse_input_type(s):
     return None
 
 
+def _parse_password_mode(s):
+    """Password mode parser.
+
+    Backward compatible:
+      TRUE / 1 / yes / ok -> "M"      (legacy 0000 Enter)
+      TRUE; M / M         -> "M"
+      TRUE; MHN / MHN     -> "MHN"    (Rootech0 coordinate sequence)
+      FALSE / blank       -> None
+    """
+    if s is None:
+        return None
+    if isinstance(s, bool):
+        return "M" if s else None
+    if isinstance(s, (int, float)):
+        return "M" if bool(s) else None
+    if not isinstance(s, str):
+        return None
+
+    tokens = [p.strip().upper() for p in s.split(";") if p and p.strip()]
+    if not tokens:
+        return None
+    if tokens[0].lower() in ("false", "0", "no", "n"):
+        return None
+    if "MHN" in tokens:
+        return "MHN"
+    if "M" in tokens:
+        return "M"
+    if tokens[0].lower() in ("true", "1", "yes", "y", "ok"):
+        return "M"
+    return None
+
+
 def _parse_number_input(s):
     if s is None:
         return None
@@ -204,9 +236,12 @@ def load_setup_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
         raise FileNotFoundError(f"setup test xlsx 없음: {path}")
 
     wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb.active
+    try:
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
 
-    rows = list(ws.iter_rows(values_only=True))
     if len(rows) < 3:
         return []
     header = [str(h) if h is not None else "" for h in rows[0]]
@@ -231,7 +266,7 @@ def load_setup_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
             "main_menu_xy":  _parse_xy_list(record.get("main_menu_xy")),
             "side_menu_xy":  _parse_xy_list(record.get("side_menu_xy")),
             "data_view_xy":  _parse_xy_list(record.get("data_view_xy")),
-            "password":      _parse_bool(record.get("password")),
+            "password":      _parse_password_mode(record.get("password")),
             "input_type":    _parse_input_type(record.get("input_type")),
             "popup_xy":      _parse_xy_list(record.get("popup_xy")),
             "apply_xy":      _parse_xy_list(record.get("apply_xy")),
