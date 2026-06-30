@@ -223,9 +223,11 @@ def load_demo_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
         raise FileNotFoundError(f"demo test xlsx 없음: {path}")
 
     wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb.active
-
-    rows = list(ws.iter_rows(values_only=True))
+    try:
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
     if len(rows) < 3:
         return []
     header = [str(h) if h is not None else "" for h in rows[0]]

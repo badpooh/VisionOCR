@@ -66,6 +66,7 @@ class ModbusLabels:
 	A2700_SETUP_UNLOCK_ADDR = 50999
 	A2700_CONTROL_UNLOCK_ADDR = 54999
 	A2700_TEST_PARAMETER_ACCESS_ADDR = 55800
+	A2700_TEST_EXIT_TIMEOUT_ADDR = 55801
 	A2700_TEST_MODE_SETUP_ADDR = 55802
 	A2700_TEST_MODE_CONTROL_ADDR = 55900
 
@@ -120,10 +121,16 @@ class ModbusLabels:
 		self.response = client.read_holding_registers(self.A2700_TEST_PARAMETER_ACCESS_ADDR, count=3)
 		if self._is_error_response(self.response):
 			raise RuntimeError(f"A2700 test parameter read failed: {self.response}")
+		timeout_value = 10000 if mode else 1
+		self._write_checked(self.A2700_TEST_EXIT_TIMEOUT_ADDR, timeout_value, "A2700 test exit timeout")
 		self._write_checked(self.A2700_TEST_MODE_SETUP_ADDR, mode, "A2700 test mode setup")
 		self._write_checked(self.A2700_TEST_PARAMETER_ACCESS_ADDR, 1, "A2700 test parameter apply")
 		self._write_checked(self.A2700_TEST_MODE_CONTROL_ADDR, mode, "A2700 test mode control")
-		print("A2700 Demo mode setting Done" if mode else "A2700 Test Mode OFF")
+		print(
+			"A2700 Demo mode setting Done (timeout=10000)"
+			if mode else
+			"A2700 Test Mode OFF (timeout=1)"
+		)
 
 	def test_mode_balance_setting(self):
 
@@ -767,6 +774,28 @@ class ModbusLabels:
 
 		from config.config_product import get_map_module
 		product = self.connect_manager.PRODUCT or "A7300"
+		if product == "A2700":
+			# Accura 2700m Modbus Map:
+			# doc 51121 System time, WCNT=4, UINT64.
+			# Project config/workbooks use wire address = doc address - 1.
+			response = self.connect_manager.setup_client.read_holding_registers(
+				51120, count=4
+			)
+			if response is None or (hasattr(response, "isError") and response.isError()):
+				print("Modbus error:", response)
+				return
+			regs = list(getattr(response, "registers", []) or [])
+			if len(regs) < 4:
+				print(f"[A2700] system time read short: {len(regs)} < 4")
+				return
+			sec_value = ((regs[0] & 0xFFFF) << 16) | (regs[1] & 0xFFFF)
+			usec_value = ((regs[2] & 0xFFFF) << 16) | (regs[3] & 0xFFFF)
+			dt_object = datetime.fromtimestamp(sec_value)
+			print(
+				f"[{product}] Unix Time: {sec_value}, "
+				f"current time: {dt_object}.{usec_value:06d}"
+			)
+			return dt_object
 		try:
 			cfg_map = get_map_module(product).ConfigMap
 			access_addr = cfg_map.addr_system_time_setup_access.value

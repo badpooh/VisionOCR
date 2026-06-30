@@ -487,8 +487,12 @@ class DemoModeA3700NRunner:
             if self.stop_requested:
                 break
             try:
+                doc_address = int(address)
+                read_address = doc_address - 1
+                if read_address < 0:
+                    raise ValueError(f"invalid Modbus address: {doc_address}")
                 word_count = _type_words(value_type)
-                response = client.read_holding_registers(address, count=word_count)
+                response = client.read_holding_registers(read_address, count=word_count)
                 if response is None or (
                     hasattr(response, "isError") and response.isError()
                 ):
@@ -503,7 +507,7 @@ class DemoModeA3700NRunner:
                 if not ok:
                     all_ok = False
                 results.append(
-                    f"Modbus[{address}] {actual:.6g}{unit_suffix} -> "
+                    f"Modbus[{doc_address}] {actual:.6g}{unit_suffix} -> "
                     f"{'PASS' if ok else 'FAIL'} "
                     f"(range {low:g}~{high:g}{unit_suffix})"
                 )
