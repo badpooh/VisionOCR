@@ -35,6 +35,42 @@ from models import config as app_config
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
+class ApplyDefaultsWorker(QThread):
+    log_line = Signal(str)
+    result_row = Signal(dict)
+    finished_all = Signal(str)
+
+    def __init__(self, cases: list, product: str = "A3700N", parent=None):
+        super().__init__(parent)
+        self.cases = cases
+        self.product = product
+        self._runner = None
+
+    def stop(self):
+        if self._runner is not None:
+            self._runner.cancel()
+
+    def run(self):
+        try:
+            from setup_test.setup_runner import SetupRunner
+            self._runner = SetupRunner(
+                log_callback=lambda s: self.log_line.emit(str(s)),
+            )
+            results = self._runner.apply_defaults(
+                cases=self.cases,
+                result_callback=lambda r: self.result_row.emit(r),
+            )
+            ok = sum(1 for r in results if r.get("overall") == "PASS")
+            skip = sum(1 for r in results if r.get("overall") == "SKIP")
+            err = sum(1 for r in results if r.get("overall") == "ERROR")
+            self.finished_all.emit(
+                f"Apply Defaults complete - PASS {ok} / SKIP {skip} / ERROR {err}"
+            )
+        except Exception as e:
+            traceback.print_exc()
+            self.finished_all.emit(f"Error: {e}")
+
+
 class NewTestWorker(QThread):
     log_line = Signal(str)
     result_row = Signal(dict)
@@ -233,6 +269,9 @@ class NewTestWidget(QWidget):
         self.btn_add_tc = QPushButton("ADD TC")
         self.btn_add_tc.clicked.connect(self._handle_add_tc)
 
+        self.btn_apply_defaults = QPushButton("Apply Defaults")
+        self.btn_apply_defaults.clicked.connect(self._handle_apply_defaults)
+
         self.btn_select_all = QPushButton("Select All")
         self.btn_select_all.clicked.connect(self._handle_select_all)
 
@@ -245,6 +284,7 @@ class NewTestWidget(QWidget):
         bar1.addWidget(self.btn_start)
         bar1.addWidget(self.btn_stop)
         bar1.addWidget(self.btn_add_tc)
+        bar1.addWidget(self.btn_apply_defaults)
         bar1.addStretch()
         bar1.addWidget(self.btn_select_all)
         bar1.addWidget(self.btn_deselect_all)
@@ -420,6 +460,7 @@ class NewTestWidget(QWidget):
         self._append_log(f"[ui] save dir = {save}")
         self._append_log(f"[ui] running {len(cases)} checked case(s)")
         self.btn_start.setEnabled(False)
+        self.btn_apply_defaults.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
         self._worker = NewTestWorker(cases, save, search,
@@ -433,6 +474,61 @@ class NewTestWidget(QWidget):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
             self._append_log("[ui] STOP requested")
+
+    def _handle_apply_defaults(self):
+        if self._worker and self._worker.isRunning():
+            QMessageBox.warning(self, "Running", "Already running.")
+            return
+        if not self.conn_manager.is_connected:
+            QMessageBox.warning(
+                self, "Connect Required",
+                "Connect to the device first.",
+            )
+            return
+
+        from setup_test.setup_xlsx_loader import load_setup_cases
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        scripts = os.path.dirname(here)
+        config_dir = os.path.join(os.path.dirname(scripts), "config")
+        product = self.conn_manager.PRODUCT or "A7300"
+        default_name = f"defaults_{product.lower()}.xlsx"
+        default_path = os.path.join(config_dir, default_name)
+        start_arg = default_path if os.path.isfile(default_path) else config_dir
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Defaults XLSX",
+            start_arg, "Excel Files (*.xlsx);;All Files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            cases = load_setup_cases(product, xlsx_path=path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"xlsx load failed: {e}")
+            return
+
+        cases = [c for c in cases if c.get("addr") is not None]
+        if not cases:
+            QMessageBox.warning(
+                self, "Empty",
+                "No valid default cases. The addr column is empty.",
+            )
+            return
+
+        self._append_log(
+            f"[ui] Apply Defaults: {len(cases)} cases from "
+            f"{os.path.basename(path)}"
+        )
+        self.btn_start.setEnabled(False)
+        self.btn_apply_defaults.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+
+        self._worker = ApplyDefaultsWorker(cases, product=product)
+        self._worker.log_line.connect(self._append_log)
+        self._worker.finished_all.connect(self._on_apply_defaults_finished)
+        self._worker.start()
 
     # -----------------------------------------------------------------------
     # Slots
@@ -495,6 +591,15 @@ class NewTestWidget(QWidget):
     @Slot(str)
     def _on_finished(self, message: str):
         self.btn_start.setEnabled(True)
+        self.btn_apply_defaults.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self._worker = None
+        self._append_log(f"[ui] {message}")
+
+    @Slot(str)
+    def _on_apply_defaults_finished(self, message: str):
+        self.btn_start.setEnabled(True)
+        self.btn_apply_defaults.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self._worker = None
         self._append_log(f"[ui] {message}")

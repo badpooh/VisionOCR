@@ -138,14 +138,19 @@ def _parse_int_scalar(s):
 
 
 def _parse_enabled(s) -> str:
-    """enabled 셀 3-state 파서 → 'enabled' / 'disabled' / 'init'.
+    """enabled 셀 상태 파서 → 'enabled' / 'disabled' / 'init' / 'reset'.
 
         TRUE / 1 / yes / 빈 셀  → 'enabled' (실행)
         FALSE / 0 / no          → 'disabled' (스킵)
         init / INIT             → 'init' (setup_initialization 만 호출)
+        reset / RESET           → 'reset' (Max/Min reset 만 호출)
     """
-    if isinstance(s, str) and s.strip().lower() == "init":
-        return "init"
+    if isinstance(s, str):
+        value = s.strip().lower()
+        if value == "init":
+            return "init"
+        if value in ("reset", "max/min reset", "maxmin reset", "maxminreset"):
+            return "reset"
     if s is False:
         return "disabled"
     if isinstance(s, str) and s.strip().lower() in ("false", "0", "no", "n"):
@@ -246,6 +251,7 @@ def load_demo_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
         cases.append({
             "name": str(record["name"]).strip(),
             "is_init": (state == "init"),
+            "is_reset": (state == "reset"),
             "main_menu_label": record.get("main_menu_label"),
             "main_menu_xy":    _parse_xy_list(record.get("main_menu_xy")),
             "side_menu_label": record.get("side_menu_label"),

@@ -370,6 +370,7 @@ class DemoModeA3700NRunner:
         self.yolo = YoloManager()
         self.log = log_callback or print
         self.stop_requested = False
+        self._last_reset_time = None
 
     def cancel(self):
         self.stop_requested = True
@@ -389,6 +390,7 @@ class DemoModeA3700NRunner:
                 self.log(f"[demo runner] {e}")
                 return []
         self.log(f"[demo runner] {len(cases)} case(s) ready for {product}")
+        self._last_reset_time = None
 
         # 데모 모드 진입 (A3700N 분기 사용)
         try:
@@ -522,13 +524,25 @@ class DemoModeA3700NRunner:
         # is_init 케이스: setup_initialization 만 호출하고 메뉴/OCR/검증 스킵.
         # enabled 셀에 'init' 적은 케이스가 여기로 들어옴.
         if case.get("is_init"):
-            self.log(f"[init] {case['name']} - setup_initialization")
+            note = "Use Apply Defaults before START for Demo Test initialization"
+            self.log(f"[init] {case['name']} - skipped. {note}")
+            return {"name": case["name"], "overall": "INIT", "note": note}
+
+        # enabled 셀에 'reset' 적은 케이스는 Max/Min reset 만 수행하고
+        # 메뉴/OCR/검증은 스킵한다. 이후 timestamp 검증 기준으로도 재사용한다.
+        if case.get("is_reset"):
+            self.log(f"[reset] {case['name']} - Max/Min reset")
             try:
-                self.modbus_label.setup_initialization()
+                reset_time = self.modbus_label.system_time_read()
+                ok = self.modbus_label.reset_max_min_only()
+                if not ok:
+                    return {"name": case["name"], "overall": "ERROR", "error": "Max/Min reset failed"}
+                self._last_reset_time = reset_time
+                time.sleep(0.3)
             except Exception as e:
-                self.log(f"[init] failed: {e}")
+                self.log(f"[reset] failed: {e}")
                 return {"name": case["name"], "overall": "ERROR", "error": str(e)}
-            return {"name": case["name"], "overall": "INIT"}
+            return {"name": case["name"], "overall": "RESET", "reset_time": reset_time}
 
         # reset 컬럼이 truthy 면 메뉴 터치 전에 Modbus 로 디바이스 max/min
         # reset 트리거. 단 system_time_read 를 reset 보다 먼저 호출 — reset_time
@@ -541,10 +555,14 @@ class DemoModeA3700NRunner:
                 ok = self.modbus_label.reset_max_min_only()
                 if not ok:
                     case["_reset_time"] = None
+                else:
+                    self._last_reset_time = case.get("_reset_time")
                 time.sleep(0.3)
             except Exception as e:
                 self.log(f"[demo runner] reset/time_read failed: {e}")
                 case["_reset_time"] = None
+        elif case.get("timestamp_count") is not None and self._last_reset_time is not None:
+            case["_reset_time"] = self._last_reset_time
 
         for key in ("main_menu_xy", "side_menu_xy", "data_view_xy"):
             for action in (case.get(key) or []):
