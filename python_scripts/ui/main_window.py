@@ -329,7 +329,7 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         root_layout.addWidget(self.tab_widget, 1)
 
-        # --- 탭: TEST (A3700N 데모 모드 + 외부소스 옵션) ---
+        # --- 탭: TEST / Demo Test ---
         self.source_test_widget = SourceTestWidget()
         self.tab_widget.addTab(self.source_test_widget, "Test")
 

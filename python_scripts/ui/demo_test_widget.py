@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""New Test 탭 — A3700N 데모 모드 + 외부소스 옵션.
+"""Demo Test 탭 — 제품별 데모 모드 + 외부소스 옵션.
 
 Setup Test 의 트리 + 결과 테이블 + 로그 레이아웃을 모방.
 - ADD TC: xlsx 파일 다이얼로그 → 트리에 케이스들을 새로 채움 (덮어쓰기).
@@ -8,7 +8,7 @@ Setup Test 의 트리 + 결과 테이블 + 로그 레이아웃을 모방.
 - Use External Source (CMC256) 체크박스 + Setup 버튼 — 외부소스 인가 옵션.
 
 전제: 상단 Connect 버튼으로 ConnectionManager 가 이미 연결돼 있어야 함.
-실행 시 PRODUCT 는 자동으로 A3700N 으로 강제.
+실행 시 현재 연결된 PRODUCT 기준으로 xlsx와 runner 분기를 선택한다.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QAbstractItemView, QPlainTextEdit,
     QMessageBox, QGroupBox, QTreeWidget, QTreeWidgetItem,
     QCheckBox, QDialog, QFormLayout, QLineEdit, QDialogButtonBox,
+    QLabel,
     QFileDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot
@@ -93,8 +94,8 @@ class NewTestWorker(QThread):
 
     def run(self):
         try:
-            from demo_test.demo_a3700n_runner import DemoModeA3700NRunner
-            self._runner = DemoModeA3700NRunner(
+            from demo_test.demo_runner import DemoRunner
+            self._runner = DemoRunner(
                 log_callback=lambda s: self.log_line.emit(str(s)),
             )
             results = self._runner.run(
@@ -231,7 +232,7 @@ class CMC256SetupDialog(QDialog):
 # Widget
 # ---------------------------------------------------------------------------
 class NewTestWidget(QWidget):
-    """A3700N 데모 모드 + 외부소스 옵션 PoC 탭."""
+    """제품별 데모 모드 + 외부소스 옵션 탭."""
 
     RESULT_HEADERS = ["#", "Name", "Overall", "Fail Summary", "Note"]
 
@@ -240,6 +241,8 @@ class NewTestWidget(QWidget):
         self.conn_manager = ConnectionManager()
         self._worker: NewTestWorker | None = None
         self._result_row = 0
+        self._summary_total = 0
+        self._summary_counts = {"PASS": 0, "FAIL": 0, "ERROR": 0, "OTHER": 0}
         self._cmc256_settings: dict = {}
         self.cb_external = QCheckBox()
         self._build_ui()
@@ -310,6 +313,16 @@ class NewTestWidget(QWidget):
         result_group = QGroupBox("Results")
         result_layout = QVBoxLayout(result_group)
         result_layout.setContentsMargins(4, 4, 4, 4)
+        result_header = QHBoxLayout()
+        result_header.setContentsMargins(2, 0, 2, 0)
+        self.lbl_result_summary = QLabel()
+        self.lbl_result_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_result_summary.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        result_header.addStretch()
+        result_header.addWidget(self.lbl_result_summary)
+        result_layout.addLayout(result_header)
         self.result_table = QTableWidget(0, len(self.RESULT_HEADERS))
         self.result_table.setHorizontalHeaderLabels(self.RESULT_HEADERS)
         self.result_table.setAlternatingRowColors(True)
@@ -340,6 +353,7 @@ class NewTestWidget(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([260, 720])
         root.addWidget(splitter, 1)
+        self._reset_result_summary(0)
 
     # -----------------------------------------------------------------------
     # ADD TC = xlsx 로드 → 트리 새로 채움
@@ -362,6 +376,9 @@ class NewTestWidget(QWidget):
             QMessageBox.critical(self, "Load Error", f"xlsx 로드 실패: {e}")
             return
         self._populate_tree(path, cases)
+        self.result_table.setRowCount(0)
+        self._result_row = 0
+        self._reset_result_summary(0)
         self._append_log(
             f"[ui] loaded {len(cases)} case(s) from {os.path.basename(path)}"
         )
@@ -457,6 +474,7 @@ class NewTestWidget(QWidget):
 
         self.result_table.setRowCount(0)
         self._result_row = 0
+        self._reset_result_summary(len(cases))
         self._append_log(f"[ui] save dir = {save}")
         self._append_log(f"[ui] running {len(cases)} checked case(s)")
         self.btn_start.setEnabled(False)
@@ -533,6 +551,32 @@ class NewTestWidget(QWidget):
     # -----------------------------------------------------------------------
     # Slots
     # -----------------------------------------------------------------------
+    def _reset_result_summary(self, total: int = 0):
+        self._summary_total = max(0, int(total or 0))
+        self._summary_counts = {"PASS": 0, "FAIL": 0, "ERROR": 0, "OTHER": 0}
+        self._update_result_summary()
+
+    def _update_result_summary(self):
+        done = sum(self._summary_counts.values())
+        total = max(self._summary_total, done)
+        other = self._summary_counts["OTHER"]
+        other_html = (
+            f' <span style="color:#667085;">OTHER {other}</span>'
+            if other else ""
+        )
+        self.lbl_result_summary.setText(
+            '<span style="color:#344054;">'
+            f"Done {done}/{total}"
+            '</span>'
+            ' <span style="color:#2e7d32;">PASS '
+            f'{self._summary_counts["PASS"]}</span>'
+            ' <span style="color:#c62828;">FAIL '
+            f'{self._summary_counts["FAIL"]}</span>'
+            ' <span style="color:#ef6c00;">ERROR '
+            f'{self._summary_counts["ERROR"]}</span>'
+            f"{other_html}"
+        )
+
     @staticmethod
     def _fail_summary(r: dict, max_items: int = 2) -> str:
         """결과 dict 에서 fail 항목 추출 → 최대 max_items 까지 요약.
@@ -582,6 +626,12 @@ class NewTestWidget(QWidget):
             self.result_table.item(row, 2).setForeground(Qt.GlobalColor.red)
         elif overall == "INIT":
             self.result_table.item(row, 2).setForeground(Qt.GlobalColor.darkBlue)
+        overall_key = str(overall).upper()
+        if overall_key in ("PASS", "FAIL", "ERROR"):
+            self._summary_counts[overall_key] += 1
+        else:
+            self._summary_counts["OTHER"] += 1
+        self._update_result_summary()
         self.result_table.scrollToBottom()
 
     @Slot(str)

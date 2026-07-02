@@ -6,7 +6,7 @@ A7300 만 펌웨어가 UNC share(\\10.10.20.30\screenshot) 에 PNG 를 떨궈주
 저장한다 → get_image_directory() 로 제품에 맞춰 고른다.
 
 (과거 DemoTest / TestRunnerWorker 흐름은 NewTestWidget +
-demo_a3700n_runner 로 통합되어 제거됨. 본 모듈은 헬퍼 두 개만 보존.)
+demo_runner 로 통합되어 제거됨. 본 모듈은 헬퍼 두 개만 보존.)
 """
 
 import os

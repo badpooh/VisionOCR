@@ -69,6 +69,8 @@ class ModbusLabels:
 	A2700_TEST_EXIT_TIMEOUT_ADDR = 55801
 	A2700_TEST_MODE_SETUP_ADDR = 55802
 	A2700_TEST_MODE_CONTROL_ADDR = 55900
+	A2700_MODULE_CLEAR_ID_ADDR = 55015       # spec 55016 Module ID
+	A2700_MOTOR_CLEAR_COMMAND_ADDR = 55016   # spec 55017 Motor clear command
 
 	touch_manager = TouchManager()
 
@@ -131,6 +133,48 @@ class ModbusLabels:
 			if mode else
 			"A2700 Test Mode OFF (timeout=1)"
 		)
+
+	def _a2700_reset_max_min_only(self):
+		client = self.connect_manager.setup_client
+		values_control = [2300, 0, 1600, 1]
+		try:
+			for v in values_control:
+				self._write_checked(self.A2700_CONTROL_UNLOCK_ADDR, v, "A2700 control unlock")
+				time.sleep(0.6)
+
+			response = client.write_registers(
+				self.A2700_MODULE_CLEAR_ID_ADDR,
+				[0, 0x0001],
+			)
+			if self._is_error_response(response):
+				print(f"[A2700] module clear FC16 failed: {response}; retry FC6")
+				self._write_checked(self.A2700_MODULE_CLEAR_ID_ADDR, 0, "A2700 clear module id")
+				time.sleep(0.1)
+				self._write_checked(
+					self.A2700_MOTOR_CLEAR_COMMAND_ADDR,
+					0x0001,
+					"A2700 motor clear command",
+				)
+
+			time.sleep(0.8)
+			try:
+				status = client.read_holding_registers(
+					self.A2700_MOTOR_CLEAR_COMMAND_ADDR,
+					count=1,
+				)
+				if not self._is_error_response(status):
+					regs = list(getattr(status, "registers", []) or [])
+					if regs:
+						print(f"[A2700] motor clear status={regs[0]}")
+						if int(regs[0]) == 3:
+							return False
+			except Exception as status_exc:
+				print(f"[A2700] motor clear status read failed: {status_exc}")
+		except Exception as e:
+			print(f"[A2700] reset_max_min_only failed: {e}")
+			return False
+		print("[A2700] Max/Min Reset (module clear command)")
+		return True
 
 	def test_mode_balance_setting(self):
 
@@ -841,15 +885,19 @@ class ModbusLabels:
 		"""제품 무관 Modbus reset 트리거. 시각 read 는 안 함 — 호출자가
 		필요하면 system_time_read() 따로 호출.
 
-		A7300/A3700N 모두 ConfigMap 의 addr_control_lock + addr_reset_max_min
-		을 사용 (주소만 다름). setup_client 가 없으면 False 리턴.
+		A2700 은 Module Clear Command 영역을 사용하고, A7300/A3700N 은
+		ConfigMap 의 addr_control_lock + addr_reset_max_min 을 사용한다.
+		setup_client 가 없으면 False 리턴.
 		"""
 		if self.connect_manager.setup_client is None:
 			print("setup_client가 연결되어 있지 않습니다.")
 			return False
 
-		from config.config_product import get_map_module
 		product = self.connect_manager.PRODUCT or "A7300"
+		if product == "A2700":
+			return self._a2700_reset_max_min_only()
+
+		from config.config_product import get_map_module
 		try:
 			cfg_map = get_map_module(product).ConfigMap
 			ctrl_addr = cfg_map.addr_control_lock.value

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""A3700N 데모 테스트 모드 러너 (PoC, xlsx 주도).
+"""Product-shared demo test runner (xlsx-driven).
 
 흐름:
-    1. test_mode_balance_setting() 호출 → A3700N 데모 모드 진입
-        (function/func_modbus.ModbusLabels 의 기존 A3700N 분기를 그대로 사용)
-    2. config/demo_test_a3700n.xlsx 에서 케이스 리스트 로드
+    1. test_mode_balance_setting() 호출 → 제품별 데모/테스트 모드 진입
+    2. config/demo_test_<product>.xlsx 에서 케이스 리스트 로드
     3. 각 케이스마다:
         a. reset_xy 가 있으면 그 좌표 터치 + system_time_read 로 reset_time 기록
         b. main_menu_xy → side_menu_xy → data_view_xy 순서로 터치
@@ -14,8 +13,7 @@
         f. _eval_demo_case 로 fixed_text + meas + ratio + timestamp 검증
     4. test_mode_off()
 
-단순 PoC — 외부소스 모드와 다르게 Modbus read 값과 비교 안 함.
-xlsx 의 meas_low/meas_high 범위 안에 들면 PASS.
+OCR 측정값과 선택적 Modbus read 값을 xlsx 기준 범위와 비교한다.
 """
 
 from __future__ import annotations
@@ -352,7 +350,7 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     }
 
 
-class DemoModeA3700NRunner:
+class DemoRunner:
     """xlsx 에 정의된 데모 테스트 케이스를 순차 실행."""
 
     def __init__(self, log_callback=None):
@@ -392,13 +390,15 @@ class DemoModeA3700NRunner:
         self.log(f"[demo runner] {len(cases)} case(s) ready for {product}")
         self._last_reset_time = None
 
-        # 데모 모드 진입 (A3700N 분기 사용)
+        # 데모/테스트 모드 진입 (제품별 분기 사용)
         try:
             self.modbus_label.test_mode_balance_setting()
         except Exception as e:
             self.log(f"[demo runner] enter demo mode failed: {e}")
             traceback.print_exc()
             return []
+        self.log("[demo runner] wait 2.0s for demo mode settle")
+        time.sleep(2.0)
 
         os.makedirs(base_save_path, exist_ok=True)
         results = []
@@ -592,3 +592,7 @@ class DemoModeA3700NRunner:
         eval_res["image_path"] = image_path
         eval_res["ocr_texts"] = ocr_texts
         return eval_res
+
+
+# Backward-compatible alias for older imports.
+DemoModeA3700NRunner = DemoRunner
