@@ -16,6 +16,7 @@ from demo_test.demo_process import image_directory, get_image_directory
 from ui.setup_test_widget import SetupTestWidget
 from ui.demo_test_widget import NewTestWidget
 from ui.source_test_widget import SourceTestWidget
+from ui.clipping_test_widget import ClippingTestWidget
 
 # ---------------------------------------------------------------------------
 # 스타일시트
@@ -339,6 +340,9 @@ class MainWindow(QMainWindow):
         # --- 탭: Setup Test ---
         self.setup_test_widget = SetupTestWidget()
         self.tab_widget.addTab(self.setup_test_widget, "Setup Test")
+
+        self.clipping_test_widget = ClippingTestWidget()
+        self.tab_widget.addTab(self.clipping_test_widget, "Clipping Test")
 
     # -----------------------------------------------------------------------
     # 설정 저장/로드
