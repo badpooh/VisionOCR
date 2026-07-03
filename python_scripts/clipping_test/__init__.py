@@ -1,0 +1,1 @@
+"""Clipping test support package."""

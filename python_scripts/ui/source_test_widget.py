@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from external.cmengine import CMEngine
 from source_test.sequence_xlsx import load_sequence, save_sequence
 from source_test.source_runner import SourceTestRunner
+from ui.result_controls import ResultControlsMixin
 
 
 class SourceTestWorker(QThread):
@@ -66,7 +67,7 @@ class SourceTestWorker(QThread):
         self.case_status.emit(update)
 
 
-class SourceTestWidget(QWidget):
+class SourceTestWidget(ResultControlsMixin, QWidget):
     """CMC-driven display function test tab."""
 
     COLUMNS = [
@@ -86,6 +87,8 @@ class SourceTestWidget(QWidget):
         self._cmc = CMEngine(log_callback=self._append_log)
         self._worker: SourceTestWorker | None = None
         self._cases: list[dict] = []
+        self._active_result_rows: set[int] = set()
+        self._init_result_controls()
         self._build_ui()
 
     def _build_ui(self):
@@ -180,6 +183,7 @@ class SourceTestWidget(QWidget):
         sequence_group = QGroupBox("Functional Test Cases")
         sequence_layout = QVBoxLayout(sequence_group)
         sequence_layout.setContentsMargins(4, 4, 4, 4)
+        sequence_layout.addLayout(self._create_result_header())
         self.sequence_table = QTableWidget(0, len(self.COLUMNS))
         self.sequence_table.setHorizontalHeaderLabels([label for _, label in self.COLUMNS])
         self.sequence_table.setAlternatingRowColors(True)
@@ -323,6 +327,8 @@ class SourceTestWidget(QWidget):
             return
         self._cases = cases
         self._populate_table(cases)
+        self._active_result_rows = set()
+        self._reset_result_summary(0)
         self._append_log(f"[ui] loaded {len(cases)} case(s) from {os.path.basename(path)}")
 
     def _handle_save_excel(self):
@@ -378,6 +384,9 @@ class SourceTestWidget(QWidget):
         self._append_log(f"[ui] running {len(cases)} case(s)")
         for row in range(self.sequence_table.rowCount()):
             self._set_case_status(row, "READY")
+        self._active_result_rows = set(table_rows)
+        self._set_last_result_dir(save_dir)
+        self._reset_result_summary(len(cases))
         self._set_running(True)
 
         self._worker = SourceTestWorker(cases, save_dir, table_rows)
@@ -398,6 +407,7 @@ class SourceTestWidget(QWidget):
             str(update.get("status") or "ERROR"),
             str(update.get("failure_summary") or ""),
         )
+        self._recalculate_result_summary_from_table()
 
     @Slot(dict)
     def _on_finished(self, result: dict):
@@ -408,6 +418,18 @@ class SourceTestWidget(QWidget):
         self._append_log(f"[ui] finished: {overall}")
         if error:
             self._append_log(f"[ui] error: {error}")
+        self._recalculate_result_summary_from_table()
+
+    def _recalculate_result_summary_from_table(self):
+        counts = {"PASS": 0, "FAIL": 0, "ERROR": 0, "OTHER": 0}
+        for row in self._active_result_rows:
+            item = self.sequence_table.item(row, self.RESULT_COLUMN)
+            status = item.text().upper() if item is not None else ""
+            if status in ("PASS", "FAIL", "ERROR"):
+                counts[status] += 1
+            elif status not in ("", "READY", "RUNNING"):
+                counts["OTHER"] += 1
+        self._set_result_summary_counts(len(self._active_result_rows), counts)
 
     def _set_case_status(
         self, row: int, status: str, failure_summary: str = ""

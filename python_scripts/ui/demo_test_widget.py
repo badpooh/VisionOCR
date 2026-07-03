@@ -31,6 +31,7 @@ from PySide6.QtGui import QFont
 
 from function.func_connection import ConnectionManager
 from models import config as app_config
+from ui.result_controls import ResultControlsMixin
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +232,7 @@ class CMC256SetupDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
-class NewTestWidget(QWidget):
+class NewTestWidget(ResultControlsMixin, QWidget):
     """제품별 데모 모드 + 외부소스 옵션 탭."""
 
     RESULT_HEADERS = ["#", "Name", "Overall", "Fail Summary", "Note"]
@@ -245,6 +246,7 @@ class NewTestWidget(QWidget):
         self._summary_counts = {"PASS": 0, "FAIL": 0, "ERROR": 0, "OTHER": 0}
         self._cmc256_settings: dict = {}
         self.cb_external = QCheckBox()
+        self._init_result_controls()
         self._build_ui()
 
     # -----------------------------------------------------------------------
@@ -313,16 +315,7 @@ class NewTestWidget(QWidget):
         result_group = QGroupBox("Results")
         result_layout = QVBoxLayout(result_group)
         result_layout.setContentsMargins(4, 4, 4, 4)
-        result_header = QHBoxLayout()
-        result_header.setContentsMargins(2, 0, 2, 0)
-        self.lbl_result_summary = QLabel()
-        self.lbl_result_summary.setTextFormat(Qt.TextFormat.RichText)
-        self.lbl_result_summary.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        result_header.addStretch()
-        result_header.addWidget(self.lbl_result_summary)
-        result_layout.addLayout(result_header)
+        result_layout.addLayout(self._create_result_header())
         self.result_table = QTableWidget(0, len(self.RESULT_HEADERS))
         self.result_table.setHorizontalHeaderLabels(self.RESULT_HEADERS)
         self.result_table.setAlternatingRowColors(True)
@@ -474,6 +467,7 @@ class NewTestWidget(QWidget):
 
         self.result_table.setRowCount(0)
         self._result_row = 0
+        self._set_last_result_dir(save)
         self._reset_result_summary(len(cases))
         self._append_log(f"[ui] save dir = {save}")
         self._append_log(f"[ui] running {len(cases)} checked case(s)")

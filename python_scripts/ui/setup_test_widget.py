@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QFont
 
 from function.func_connection import ConnectionManager
+from ui.result_controls import ResultControlsMixin
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +192,7 @@ class SetupTestWorker(QThread):
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
-class SetupTestWidget(QWidget):
+class SetupTestWidget(ResultControlsMixin, QWidget):
     """Setup Test 탭 — xlsx 기반 설정값 검증."""
 
     RESULT_HEADERS = ["#", "Name", "Overall", "Fail Summary", "Note"]
@@ -201,6 +202,7 @@ class SetupTestWidget(QWidget):
         self.conn_manager = ConnectionManager()
         self._worker: SetupTestWorker | None = None
         self._result_row = 0
+        self._init_result_controls()
         self._build_ui()
 
     # -----------------------------------------------------------------------
@@ -269,6 +271,7 @@ class SetupTestWidget(QWidget):
         result_group = QGroupBox("Results")
         result_layout = QVBoxLayout(result_group)
         result_layout.setContentsMargins(4, 4, 4, 4)
+        result_layout.addLayout(self._create_result_header())
         self.result_table = QTableWidget(0, len(self.RESULT_HEADERS))
         self.result_table.setHorizontalHeaderLabels(self.RESULT_HEADERS)
         self.result_table.setAlternatingRowColors(True)
@@ -320,6 +323,9 @@ class SetupTestWidget(QWidget):
             QMessageBox.critical(self, "Load Error", f"xlsx 로드 실패: {e}")
             return
         self._populate_tree(path, cases)
+        self.result_table.setRowCount(0)
+        self._result_row = 0
+        self._reset_result_summary(0)
         self._append_log(
             f"[ui] loaded {len(cases)} case(s) from {os.path.basename(path)}"
         )
@@ -389,6 +395,8 @@ class SetupTestWidget(QWidget):
 
         self.result_table.setRowCount(0)
         self._result_row = 0
+        self._set_last_result_dir(save)
+        self._reset_result_summary(len(cases))
         self._append_log(f"[ui] save dir = {save}")
         self._append_log(f"[ui] running {len(cases)} checked case(s)")
         self.btn_start.setEnabled(False)
@@ -523,6 +531,7 @@ class SetupTestWidget(QWidget):
             self.result_table.item(row, 2).setForeground(Qt.GlobalColor.darkBlue)
         elif overall == "SKIP":
             self.result_table.item(row, 2).setForeground(Qt.GlobalColor.gray)
+        self._record_result_summary(overall)
         self.result_table.scrollToBottom()
 
     @Slot(str)
