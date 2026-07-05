@@ -182,29 +182,14 @@ class ClippingRunner:
             return action()
 
     def _unlock_setup(self, product: str) -> bool:
+        """(공용 로직: function/modbus_unlock.py — 스펙은 제품 config 모듈)"""
+        from function.modbus_unlock import unlock_setup
         client = self.connect_manager.setup_client
         if client is None:
             raise RuntimeError("setup_client is not connected")
-
-        if product == "A2700":
-            for value in [2300, 0, 700, 1]:
-                self._write_single(50999, value, "A2700 setup unlock")
-                time.sleep(0.4)
-            for value in [2300, 0, 1600, 1]:
-                try:
-                    self._write_single(54999, value, "A2700 control unlock")
-                except Exception as exc:
-                    self.log(f"[clipping] control unlock warning: {exc}")
-                time.sleep(0.4)
-            return True
-
-        from config.config_product import get_map_module
-
-        cfg_map = get_map_module(product).ConfigMap
-        ctrl_addr = cfg_map.addr_control_lock.value[0]
-        for value in [2300, 0, 1600, 1]:
-            self._write_single(ctrl_addr, value, "setup unlock")
-            time.sleep(0.4)
+        if not unlock_setup(client, product, log=self.log):
+            # 기존 semantics 유지: 언락 실패는 예외로 케이스 중단
+            raise RuntimeError(f"setup unlock failed ({product})")
         return True
 
     def _write_and_commit(self, case: dict, value, label: str):

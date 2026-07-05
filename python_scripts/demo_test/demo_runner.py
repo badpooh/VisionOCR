@@ -381,12 +381,24 @@ class DemoRunner:
         - 아니면 xlsx_path 우선, 그것도 없으면 product 기반 default xlsx 로드.
         - result_callback(dict) 가 주어지면 각 케이스 끝날 때마다 호출 — UI 실시간 갱신용.
         """
+        def _abort_result(stage: str, err) -> list:
+            # 시작 단계 실패를 빈 리스트로 돌려주면 UI 에 아무 흔적이 안 남아
+            # 실패가 묻힌다 → 명시적 ERROR row 하나를 결과/콜백으로 남긴다.
+            res = {"name": stage, "overall": "ERROR",
+                   "error": str(err), "index": 1}
+            if result_callback is not None:
+                try:
+                    result_callback(res)
+                except Exception as cb_err:
+                    self.log(f"[demo runner] result_callback failed: {cb_err}")
+            return [res]
+
         if cases is None:
             try:
                 cases = load_demo_cases(product, xlsx_path=xlsx_path)
             except FileNotFoundError as e:
                 self.log(f"[demo runner] {e}")
-                return []
+                return _abort_result("[xlsx load]", e)
         self.log(f"[demo runner] {len(cases)} case(s) ready for {product}")
         self._last_reset_time = None
 
@@ -396,7 +408,7 @@ class DemoRunner:
         except Exception as e:
             self.log(f"[demo runner] enter demo mode failed: {e}")
             traceback.print_exc()
-            return []
+            return _abort_result("[demo mode 진입]", e)
         self.log("[demo runner] wait 2.0s for demo mode settle")
         time.sleep(2.0)
 

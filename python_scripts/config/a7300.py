@@ -18,3 +18,10 @@
 
 from .config_map_a7300 import ConfigMap, ConfigInitialValue  # noqa: F401
 from .config_roi_a7300 import ConfigROI, Configs  # noqa: F401
+
+# Modbus 언락 시퀀스 — (주소, 키 시퀀스, critical).
+# 주소는 ConfigMap.addr_control_lock (2901) 단일 소스에서 참조.
+# 실행 로직: function/modbus_unlock.py
+UNLOCK_SEQUENCE = [
+    (ConfigMap.addr_control_lock.value[0], [2300, 0, 1600, 1], True),
+]

@@ -314,48 +314,18 @@ class SetupRunner:
     def _unlock_setup(self):
         """control_lock 시퀀스로 lock 풀기.
 
-        A7300/A3700N: ConfigMap.addr_control_lock + key [2300, 0, 1600, 1]
-        A2700:        와이어 50999 (사양 51000) + key [2300, 0, 700, 1]
-                      (A2700 사양서 'Remote Setup Unlock' 항목 그대로)
+        스펙(주소/키)은 제품 config 모듈의 UNLOCK_SEQUENCE, 실행은
+        function/modbus_unlock.py 공용 함수 (runner 3곳 공유).
 
         같은 modbus connection 내에서 unlock 한 번 한 후 후속 write 들은
         모두 적용. 새 connection 마다 다시 unlock 필요.
         """
-        client = self.connect_manager.setup_client
-        if client is None:
-            return False
-        product = self.connect_manager.PRODUCT or "A7300"
-
-        # A2700 — Setup unlock + Control unlock 둘 다 풀어둠
-        if product == "A2700":
-            # Setup unlock — 와이어 50999 (사양 51000), key [2300, 0, 700, 1]
-            for v in [2300, 0, 700, 1]:
-                rr = client.write_register(50999, v)
-                if rr is None or (hasattr(rr, "isError") and rr.isError()):
-                    self.log(f"[setup] A2700 setup unlock write {v} failed: {rr}")
-                    return False
-                time.sleep(0.4)
-            # Control unlock — 와이어 54999 (사양 55000), key [2300, 0, 1600, 1]
-            for v in [2300, 0, 1600, 1]:
-                rr = client.write_register(54999, v)
-                if rr is None or (hasattr(rr, "isError") and rr.isError()):
-                    self.log(f"[setup] A2700 control unlock write {v} failed: {rr}")
-                    # control unlock 실패해도 setup 은 가능하니 계속 진행
-                time.sleep(0.4)
-            return True
-
-        # A7300 / A3700N — 기존 경로
-        from config.config_product import get_map_module
-        try:
-            cfg_map = get_map_module(product).ConfigMap
-            ctrl_addr = cfg_map.addr_control_lock.value
-        except (KeyError, AttributeError, Exception) as e:
-            self.log(f"[setup] addr_control_lock not in ConfigMap: {e}")
-            return False
-        for v in [2300, 0, 1600, 1]:
-            client.write_register(ctrl_addr[0], v)
-            time.sleep(0.4)
-        return True
+        from function.modbus_unlock import unlock_setup
+        return unlock_setup(
+            self.connect_manager.setup_client,
+            self.connect_manager.PRODUCT or "A7300",
+            log=self.log,
+        )
 
     def _write_value(self, addr_meta, value, value_type):
         """addr_meta = (addr, words) 튜플. value_type 에 따라 word 인코딩 후

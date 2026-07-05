@@ -127,11 +127,40 @@ class SourceTestRunner:
 
             rows.extend(self._read_measurement_modbus(case, output))
             self._navigate(case.get("navigation") or [])
-            image_path, ocr_with_boxes = self._capture_ocr(case, output, save_dir)
+            image_path, ocr_with_boxes, ocr_error = self._capture_ocr(
+                case, output, save_dir
+            )
             expected = [
                 item for item in (case.get("expected") or [])
                 if not item.get("source_name") or item.get("source_name") == source_name
             ]
+            # OCR 기반 검증이 필요한데 스크린샷/OCR 단계 자체가 실패했으면
+            # 빈 토큰으로 비교(오판 위험)하지 않고 명시적 ERROR row 로 남긴다.
+            needs_ocr = any(
+                item.get("required_text") or item.get("expected") is not None
+                for item in expected
+            )
+            if ocr_error and needs_ocr:
+                self.log(f"[test] OCR phase failed — mark ERROR: {ocr_error}")
+                rows.append({
+                    "tc_id": case.get("tc_id"),
+                    "test_name": case.get("name"),
+                    "source_name": output.get("name"),
+                    "check_name": "OCR",
+                    "expected": "",
+                    "actual": "",
+                    "unit": "",
+                    "tolerance": "",
+                    "tolerance_type": "",
+                    "error": f"OCR 단계 실패: {ocr_error}",
+                    "limit": "",
+                    "label_ok": False,
+                    "unit_ok": False,
+                    "overall": "ERROR",
+                    "ocr_text": "",
+                    "image_path": image_path or "",
+                })
+                continue
             fixed_result = self._evaluate_fixed_text(
                 case, output, expected, image_path, ocr_with_boxes
             )
@@ -171,23 +200,18 @@ class SourceTestRunner:
             time.sleep(0.15)
 
     def _unlock_setup(self):
+        """(공용 로직: function/modbus_unlock.py — 스펙은 제품 config 모듈)
+
+        표준 실패 처리: critical 스텝 실패 시 예외 → 케이스 중단.
+        (이전에는 에러 확인 없이 조용히 진행했음)
+        """
+        from function.modbus_unlock import unlock_setup
         client = self.connect_manager.setup_client
         if client is None:
             return
         product = self.connect_manager.PRODUCT or "A7300"
-        if product == "A2700":
-            for addr, values in (
-                (50999, [2300, 0, 700, 1]),
-                (54999, [2300, 0, 1600, 1]),
-            ):
-                for value in values:
-                    client.write_register(addr, value)
-                    time.sleep(0.25)
-            return
-
-        for value in [2300, 0, 1600, 1]:
-            client.write_register(54999, value)
-            time.sleep(0.25)
+        if not unlock_setup(client, product, log=self.log):
+            raise RuntimeError(f"setup unlock failed ({product})")
 
     def _write_setting(self, item: dict):
         client = self.connect_manager.setup_client
@@ -326,6 +350,11 @@ class SourceTestRunner:
             self._wait(float(action.get("wait_s") or 0))
 
     def _capture_ocr(self, case: dict, output: dict, save_dir: str):
+        """스크린샷 + OCR. 반환: (saved_path, ocr_with_boxes, ocr_error).
+
+        ocr_error 는 스크린샷/OCR 단계 자체가 실패했을 때의 사유 문자열
+        (정상이면 None). 호출부에서 검증 대상이 있으면 ERROR 처리에 사용.
+        """
         start_time = datetime.now()
         self.touch_manager.screenshot()
         search_pattern = os.path.join(get_image_directory(), "**", "*.png")
@@ -341,13 +370,17 @@ class SourceTestRunner:
                 self.log(f"[capture] copy failed: {e}")
 
         ocr_with_boxes = []
+        ocr_error = None
         if image_path:
             try:
                 cropped, _names, boxes = self.yolo.yolo_basic(image_path, return_boxes=True)
                 ocr_with_boxes = self.paddleocr.paddleocr_basic(image=cropped, boxes=boxes)
             except Exception as e:
+                ocr_error = str(e)
                 self.log(f"[ocr] failed: {e}")
-        return saved_path, ocr_with_boxes
+        else:
+            ocr_error = "screenshot 이미지 없음"
+        return saved_path, ocr_with_boxes, ocr_error
 
     def _evaluate_fixed_text(self, case, output, expected, image_path, ocr_with_boxes):
         required_texts = [
