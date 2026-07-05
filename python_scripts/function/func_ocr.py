@@ -144,7 +144,9 @@ class YoloManager:
         # (시각적으로는 흑백이지만 데이터 형태는 3채널)
         roi_for_yolo = cv2.cvtColor(gray_roi, cv2.COLOR_GRAY2BGR)
 
-        model = YOLO(self.MODEL_PATH)
+        # __init__ 에서 로드한 모델 재사용 — 호출마다 재로드하면 매번
+        # 모델 파일을 다시 읽어 수 초씩 낭비된다.
+        model = self.model
 
         # results = model(roi, conf=0.3, iou=0.2)
         results = model(
@@ -342,14 +344,13 @@ class YoloManager:
             # 정렬/cropped/name 추출은 인덱스 0~3 사용 — return_boxes=False 호출에는
             # 영향 없음. 5번째 요소는 return_boxes=True 일 때 boxes_list 로 분리.
             detections.append((gy1, gx1, cropped_img, name, (gx1, gy1, gx2, gy2)))
-            detections_sorted = sorted(detections, key=lambda d: (d[1], d[0]))
 
-            detections_sorted = sort_with_x_tolerance(detections, tol=5)
-
-            # 정렬된 순서대로 최종 반환 리스트 생성
-            cropped_images_list = [item[2] for item in detections_sorted]
-            detected_names = [item[3] for item in detections_sorted]
-            boxes_list = [item[4] for item in detections_sorted]
+        # 정렬/최종 리스트 생성은 루프 밖에서 한 번만 — 기존에는 매 반복마다
+        # 전체를 재정렬(O(N^2))하고 결과 리스트를 다시 만들었다 (결과 동일).
+        detections_sorted = sort_with_x_tolerance(detections, tol=5)
+        cropped_images_list = [item[2] for item in detections_sorted]
+        detected_names = [item[3] for item in detections_sorted]
+        boxes_list = [item[4] for item in detections_sorted]
 
         if return_boxes:
             return cropped_images_list, detected_names, boxes_list
@@ -357,8 +358,39 @@ class YoloManager:
 
 class PaddleOCRManager:
 
+    # 클래스 레벨 OCR 인스턴스 캐시 — PaddleOCR 생성은 모델 로드를 동반해
+    # 무겁다. 설정이 고정이므로 프로세스당 1회만 생성해 재사용한다.
+    _ocr_instance = None
+
     def __init__(self):
         pass
+
+    @classmethod
+    def _get_ocr(cls):
+        if cls._ocr_instance is None:
+            execution_directory = os.getcwd()
+
+            rec_model_folder_path = os.path.join(
+                execution_directory, 'ppocr', 'rec', 'en_PP-OCRv5_mobile_rec_infer')
+            rec_model_folder_path = os.path.normpath(
+                rec_model_folder_path).replace('\\', '/')
+
+            det_model_folder_path = os.path.join(
+                execution_directory, 'ppocr', 'det', 'PP-OCRv5_server_det_infer')
+            det_model_folder_path = os.path.normpath(
+                det_model_folder_path).replace('\\', '/')
+
+            cls._ocr_instance = PaddleOCR(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                text_detection_model_name="PP-OCRv5_server_det",
+                text_detection_model_dir=det_model_folder_path,
+                text_recognition_model_name="en_PP-OCRv5_mobile_rec",
+                text_recognition_model_dir=rec_model_folder_path,
+                lang='en',
+            )
+        return cls._ocr_instance
 
     def _split_known_pairs(self, texts):
         """OCR 이 한 토큰으로 묶어 잡은 알려진 라벨 쌍을 분리.
@@ -379,26 +411,9 @@ class PaddleOCRManager:
         return out
 
     def paddleocr_basic(self, image, boxes=None):
-        execution_directory = os.getcwd()
-
-        rec_model_folder_path = os.path.join(execution_directory, 'ppocr', 'rec', 'en_PP-OCRv5_mobile_rec_infer')
-        rec_model_folder_path = os.path.normpath(rec_model_folder_path).replace('\\', '/')
-
-        det_model_folder_path = os.path.join(execution_directory, 'ppocr', 'det', 'PP-OCRv5_server_det_infer')
-        det_model_folder_path = os.path.normpath(det_model_folder_path).replace('\\', '/')
-
         img_path = image  # 원본 경로 보존 (로그용)
 
-        ocr = PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            text_detection_model_name="PP-OCRv5_server_det",
-            text_detection_model_dir=det_model_folder_path,
-            text_recognition_model_name="en_PP-OCRv5_mobile_rec",
-            text_recognition_model_dir=rec_model_folder_path,
-            lang='en',
-        )
+        ocr = self._get_ocr()
 
         ocr_results = []
         min_score = 0.3  # 필요 시 조정

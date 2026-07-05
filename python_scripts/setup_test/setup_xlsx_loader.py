@@ -250,7 +250,9 @@ def load_setup_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
     for r in rows[2:]:
         if r is None or all(v is None for v in r):
             continue
-        record = dict(zip(header, r))
+        # zip 은 짧은 행에서 뒤 컬럼을 조용히 누락시키므로 index-safe 매핑 사용
+        record = {key: (r[idx] if idx < len(r) else None)
+                  for idx, key in enumerate(header) if key}
         if not record.get("name"):
             continue
         state = _parse_enabled(record.get("enabled"))

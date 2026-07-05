@@ -7,6 +7,7 @@ import shutil
 import struct
 import threading
 import time
+import traceback
 from datetime import datetime
 
 from demo_test.demo_process import get_image_directory
@@ -81,6 +82,7 @@ class SourceTestRunner:
         except Exception as e:
             result["overall"] = "ERROR"
             result["error"] = str(e)
+            traceback.print_exc()  # 스택 추적 보존 (디버깅용)
             self.log(f"[functional test] error: {e}")
             try:
                 self.cmc.out_off()

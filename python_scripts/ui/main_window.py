@@ -473,6 +473,12 @@ class MainWindow(QMainWindow):
     # 종료 처리
     # -----------------------------------------------------------------------
     def closeEvent(self, event):
+        # 실행 중인 connect/disconnect 워커 스레드 정리 (좀비 스레드 방지)
+        for worker in (getattr(self, "_connect_worker", None),
+                       getattr(self, "_disconnect_worker", None)):
+            if worker is not None and worker.isRunning():
+                worker.quit()
+                worker.wait(3000)
         if self.conn_manager.is_connected:
             try:
                 self.conn_manager.tcp_disconnect()

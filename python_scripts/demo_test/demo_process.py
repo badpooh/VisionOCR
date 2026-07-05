@@ -16,7 +16,11 @@ from function.func_touch import TouchManager
 from models import config as app_config
 
 
-image_directory = r"\\10.10.20.30\screenshot"
+# A7300 스크린샷 UNC 공유 경로. 환경이 다르면 VISIONOCR_SCREENSHOT_DIR
+# 환경변수로 재정의 가능 (미설정 시 기존 기본값 유지).
+image_directory = os.environ.get(
+    "VISIONOCR_SCREENSHOT_DIR", r"\\10.10.20.30\screenshot"
+)
 
 
 def get_image_directory() -> str:

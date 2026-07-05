@@ -47,6 +47,16 @@ def load_test_plan(path: str) -> list[dict]:
 
     wb = load_workbook(path, data_only=True, read_only=True)
     try:
+        # 시트명 오타 시 해당 시트가 조용히 무시되므로, 누락된 알려진 시트를
+        # 경고로 남긴다 (시트들은 선택적일 수 있어 에러로는 처리하지 않음).
+        known_sheets = ("TestCases", "SetupModbus", "CMC",
+                        "MeasurementModbus", "Navigation", "Expected")
+        missing_sheets = [s for s in known_sheets if s not in wb.sheetnames]
+        if missing_sheets:
+            print(f"[sequence_xlsx] 경고: 시트 없음(무시됨): "
+                  f"{', '.join(missing_sheets)} — 시트명 오타인지 확인 "
+                  f"(실제 시트: {', '.join(wb.sheetnames)})")
+
         cases = _read_test_cases(
             wb["TestCases"] if "TestCases" in wb.sheetnames else wb.active
         )

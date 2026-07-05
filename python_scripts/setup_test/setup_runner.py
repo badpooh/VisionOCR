@@ -303,38 +303,10 @@ class SetupRunner:
         return results
 
     def _encode_value(self, value, value_type, client):
-        """target value 를 register words list 로 인코딩."""
-        t = (value_type or "uint16").lower()
-        if t == "uint16":
-            return [int(value) & 0xFFFF]
-        if t == "int16":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x10000) & 0xFFFF
-            return [v]
-        if t == "uint32":
-            v = int(value) & 0xFFFFFFFF
-            return [(v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "int32":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x100000000) & 0xFFFFFFFF
-            return [(v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "uint64":
-            v = int(value) & 0xFFFFFFFFFFFFFFFF
-            return [(v >> 48) & 0xFFFF, (v >> 32) & 0xFFFF,
-                    (v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "int64":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x10000000000000000) & 0xFFFFFFFFFFFFFFFF
-            return [(v >> 48) & 0xFFFF, (v >> 32) & 0xFFFF,
-                    (v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "float":
-            return list(client.convert_to_registers(
-                float(value), client.DATATYPE.FLOAT32, word_order="big"
-            ))
-        return [int(value) & 0xFFFF]
+        """target value 를 register words list 로 인코딩.
+        (공용 로직: function/modbus_values.py — clipping runner 와 공유)"""
+        from function.modbus_values import encode_value
+        return encode_value(value, value_type, client)
 
     # ------------------------------------------------------------
     # Modbus 헬퍼
@@ -414,34 +386,9 @@ class SetupRunner:
         resp = client.read_holding_registers(addr, count=words)
         if resp.isError():
             return None
-        regs = resp.registers
-        t = (value_type or "uint16").lower()
-        if t == "uint16":
-            return regs[0]
-        if t == "int16":
-            v = regs[0]
-            return v - 0x10000 if v & 0x8000 else v
-        if t == "uint32":
-            return (regs[0] << 16) | regs[1] if len(regs) >= 2 else regs[0]
-        if t == "int32":
-            v = (regs[0] << 16) | regs[1] if len(regs) >= 2 else regs[0]
-            return v - 0x100000000 if v & 0x80000000 else v
-        if t == "uint64":
-            if len(regs) < 4:
-                return regs[0]
-            return ((regs[0] & 0xFFFF) << 48) | ((regs[1] & 0xFFFF) << 32) \
-                   | ((regs[2] & 0xFFFF) << 16) | (regs[3] & 0xFFFF)
-        if t == "int64":
-            if len(regs) < 4:
-                return regs[0]
-            v = ((regs[0] & 0xFFFF) << 48) | ((regs[1] & 0xFFFF) << 32) \
-                | ((regs[2] & 0xFFFF) << 16) | (regs[3] & 0xFFFF)
-            return v - 0x10000000000000000 if v & 0x8000000000000000 else v
-        if t == "float":
-            return client.convert_from_registers(
-                regs, client.DATATYPE.FLOAT32, word_order="big"
-            )
-        return regs[0]
+        # 디코딩 공용 로직: function/modbus_values.py (clipping runner 와 공유)
+        from function.modbus_values import decode_registers
+        return decode_registers(resp.registers, value_type, client)
 
     def _read_access(self, access_meta, target_meta=None):
         """access 레지스터 read.
@@ -616,6 +563,7 @@ class SetupRunner:
         # setup_client 가 없는 케이스(예: A2700 — 브릿지가 502 점유)는 unlock/
         # write/read-back 모두 skip 하고 UI 터치 + OCR phase 만 진행한다.
         # read_ok 는 None 으로 남겨 평가 단계에서 PASS 로 취급되도록 함.
+        # 단, 결과에는 note="MODBUS_SKIPPED" 로 남겨 검증됨/스킵됨을 구분한다.
         read_ok = None
         actual = None
         has_setup_client = self.connect_manager.setup_client is not None
@@ -684,6 +632,7 @@ class SetupRunner:
         self.touch_manager.screenshot()
         image_path = self.eval_manager.load_image_file(search_pattern, start_time)
         ocr_with_boxes = []
+        ocr_error = None
         if image_path:
             try:
                 cropped, names, boxes = self.yolo.yolo_basic(
@@ -693,7 +642,10 @@ class SetupRunner:
                     image=cropped, boxes=boxes
                 )
             except Exception as e:
+                ocr_error = str(e)
                 self.log(f"[setup] OCR failed: {e}")
+        else:
+            ocr_error = "screenshot 이미지 없음"
 
         # 9. ROI 필터
         roi = case.get("roi_xy")
@@ -702,6 +654,13 @@ class SetupRunner:
 
         # 10. multiset 비교
         expected = case.get("expected_text") or []
+        # OCR 검증이 필요한 케이스(expected 존재)에서 스크린샷/OCR 단계 자체가
+        # 실패했으면 장비 불일치(FAIL)가 아니라 인프라 오류(ERROR)로 구분한다.
+        # 빈 OCR 결과로 비교를 진행하면 expected 가 비어있을 때 false PASS 가 됨.
+        if ocr_error and expected:
+            return {"name": case["name"], "overall": "ERROR",
+                    "error": f"OCR 단계 실패: {ocr_error}",
+                    "image_path": image_path}
         missing, extra = self._check_text_multiset(ocr_tokens, expected)
         ocr_ok = (len(missing) == 0 and len(extra) == 0)
 
@@ -732,6 +691,7 @@ class SetupRunner:
         return {
             "name": case["name"],
             "overall": overall,
+            "note": "" if has_setup_client else "MODBUS_SKIPPED (no setup_client)",
             "addr": addr,
             "access_addr": access_addr,
             "value_type": types,

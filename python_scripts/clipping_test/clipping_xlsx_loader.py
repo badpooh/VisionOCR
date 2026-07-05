@@ -173,7 +173,9 @@ def load_clipping_cases(product: str = "A2700", xlsx_path: str | None = None) ->
     for row_number, row in enumerate(rows[2:], start=3):
         if row is None or all(v is None for v in row):
             continue
-        record = dict(zip(header, row))
+        # zip 은 짧은 행에서 뒤 컬럼을 조용히 누락시키므로 index-safe 매핑 사용
+        record = {key: (row[idx] if idx < len(row) else None)
+                  for idx, key in enumerate(header) if key}
         case = _case_from_record(record, row_number, product)
         if case is not None:
             cases.append(case)

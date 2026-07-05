@@ -264,70 +264,16 @@ class ClippingRunner:
             raise RuntimeError(f"write failed addr={addr} value={word}: {resp}")
 
     def _encode_value(self, value, value_type: str) -> list[int]:
+        """(공용 로직: function/modbus_values.py — setup runner 와 공유)"""
+        from function.modbus_values import encode_value
         client = self.connect_manager.setup_client
-        t = (value_type or "uint16").lower()
-        if t == "uint16":
-            return [int(value) & 0xFFFF]
-        if t == "int16":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x10000) & 0xFFFF
-            return [v]
-        if t == "uint32":
-            v = int(value) & 0xFFFFFFFF
-            return [(v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "int32":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x100000000) & 0xFFFFFFFF
-            return [(v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "uint64":
-            v = int(value) & 0xFFFFFFFFFFFFFFFF
-            return [(v >> 48) & 0xFFFF, (v >> 32) & 0xFFFF,
-                    (v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "int64":
-            v = int(value)
-            if v < 0:
-                v = (v + 0x10000000000000000) & 0xFFFFFFFFFFFFFFFF
-            return [(v >> 48) & 0xFFFF, (v >> 32) & 0xFFFF,
-                    (v >> 16) & 0xFFFF, v & 0xFFFF]
-        if t == "float":
-            return list(client.convert_to_registers(
-                float(value), client.DATATYPE.FLOAT32, word_order="big"
-            ))
-        return [int(value) & 0xFFFF]
+        return encode_value(value, value_type, client)
 
     def _decode_value(self, regs: list[int], value_type: str):
+        """(공용 로직: function/modbus_values.py — setup runner 와 공유)"""
+        from function.modbus_values import decode_registers
         client = self.connect_manager.setup_client
-        t = (value_type or "uint16").lower()
-        if not regs:
-            return None
-        if t == "uint16":
-            return regs[0]
-        if t == "int16":
-            v = regs[0]
-            return v - 0x10000 if v & 0x8000 else v
-        if t == "uint32":
-            return (regs[0] << 16) | regs[1] if len(regs) >= 2 else regs[0]
-        if t == "int32":
-            v = (regs[0] << 16) | regs[1] if len(regs) >= 2 else regs[0]
-            return v - 0x100000000 if v & 0x80000000 else v
-        if t == "uint64":
-            if len(regs) < 4:
-                return regs[0]
-            return ((regs[0] & 0xFFFF) << 48) | ((regs[1] & 0xFFFF) << 32) \
-                | ((regs[2] & 0xFFFF) << 16) | (regs[3] & 0xFFFF)
-        if t == "int64":
-            if len(regs) < 4:
-                return regs[0]
-            v = ((regs[0] & 0xFFFF) << 48) | ((regs[1] & 0xFFFF) << 32) \
-                | ((regs[2] & 0xFFFF) << 16) | (regs[3] & 0xFFFF)
-            return v - 0x10000000000000000 if v & 0x8000000000000000 else v
-        if t == "float":
-            return client.convert_from_registers(
-                regs, client.DATATYPE.FLOAT32, word_order="big"
-            )
-        return regs[0]
+        return decode_registers(regs, value_type, client)
 
     def _expected_ok(self, actual, case: dict) -> bool:
         expected = case.get("expected_value")
