@@ -430,14 +430,16 @@ class SetupTestWidget(ResultControlsMixin, QWidget):
 
         from setup_test.setup_xlsx_loader import load_setup_cases
 
-        # 기본 위치: config/defaults_<product>.xlsx
-        here = os.path.dirname(os.path.abspath(__file__))
-        scripts = os.path.dirname(here)
-        config_dir = os.path.join(os.path.dirname(scripts), "config")
+        # 기본 위치: config/<제품>/Defaults_<모델>.xlsx (경로 규칙: config.xlsx_paths)
+        from config.xlsx_paths import xlsx_path, product_config_dir, config_root
         product = self.conn_manager.PRODUCT or "A7300"
-        default_name = f"defaults_{product.lower()}.xlsx"
-        default_path = os.path.join(config_dir, default_name)
-        start_arg = default_path if os.path.isfile(default_path) else config_dir
+        default_path = xlsx_path("Defaults", product)
+        if os.path.isfile(default_path):
+            start_arg = default_path
+        elif os.path.isdir(product_config_dir(product)):
+            start_arg = product_config_dir(product)
+        else:
+            start_arg = config_root()
 
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Defaults XLSX",

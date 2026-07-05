@@ -273,12 +273,12 @@ class ClippingTestWidget(ResultControlsMixin, QWidget):
         from clipping_test.clipping_xlsx_loader import load_clipping_cases
 
         product = self.conn_manager.PRODUCT or "A2700"
-        config_dir = self._config_dir()
-        sample_path = os.path.join(config_dir, f"clipping_test_{product.lower()}_sample.xlsx")
-        default_path = os.path.join(config_dir, f"clipping_test_{product.lower()}.xlsx")
-        start_path = sample_path if os.path.isfile(sample_path) else default_path
+        from config.xlsx_paths import xlsx_path, product_config_dir
+        start_path = xlsx_path("Clipping_Test", product)
         if not os.path.isfile(start_path):
-            start_path = config_dir
+            start_path = product_config_dir(product)
+        if not os.path.isdir(start_path) and not os.path.isfile(start_path):
+            start_path = self._config_dir()
 
         path, _ = QFileDialog.getOpenFileName(
             self,

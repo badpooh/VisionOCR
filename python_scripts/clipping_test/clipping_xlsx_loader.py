@@ -22,9 +22,9 @@ TYPE_WORDS = {
 
 
 def _default_xlsx_path(product: str) -> str:
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(os.path.dirname(here))
-    return os.path.join(root, "config", f"clipping_test_{product.lower()}.xlsx")
+    # config/<제품>/Clipping_Test_<모델>.xlsx (경로 규칙: config.xlsx_paths)
+    from config.xlsx_paths import xlsx_path
+    return xlsx_path("Clipping_Test", product)
 
 
 def _text(value, default: str = "") -> str:
