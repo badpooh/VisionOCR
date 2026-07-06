@@ -69,6 +69,7 @@ class ModbusLabels:
 	A2700_TEST_EXIT_TIMEOUT_ADDR = 55801
 	A2700_TEST_MODE_SETUP_ADDR = 55802
 	A2700_TEST_MODE_CONTROL_ADDR = 55900
+	A2700_DEMAND_CONTROL_ADDR = 55001       # spec 55002 Demand control
 	A2700_MODULE_CLEAR_ID_ADDR = 55015       # spec 55016 Module ID
 	A2700_MOTOR_CLEAR_COMMAND_ADDR = 55016   # spec 55017 Motor clear command
 
@@ -175,6 +176,33 @@ class ModbusLabels:
 			return False
 		print("[A2700] Max/Min Reset (module clear command)")
 		return True
+
+	def _a2700_demand_control_write(self, value, label):
+		values_control = [2300, 0, 1600, 1]
+		try:
+			for v in values_control:
+				self._write_checked(self.A2700_CONTROL_UNLOCK_ADDR, v, "A2700 control unlock")
+				time.sleep(0.6)
+			self._write_checked(
+				self.A2700_DEMAND_CONTROL_ADDR,
+				value,
+				f"A2700 demand {label}",
+			)
+			time.sleep(0.3)
+		except Exception as e:
+			print(f"[A2700] demand {label} failed: {e}")
+			return False
+		print(f"[A2700] Demand {label} write (0x{value:04X})")
+		return True
+
+	def _a2700_reset_demand_sync_only(self):
+		# bit0 current subdemand sync, bit8 power subdemand sync.
+		return self._a2700_demand_control_write(0x0101, "sync")
+
+	def _a2700_reset_demand_clear_sync_only(self):
+		# bit0 current subdemand sync, bit1 current demand clear,
+		# bit8 power subdemand sync, bit9 power demand clear.
+		return self._a2700_demand_control_write(0x0303, "clear/sync")
 
 	def test_mode_balance_setting(self):
 
@@ -917,6 +945,119 @@ class ModbusLabels:
 			print(f"[{product}] reset_max_min_only failed: {e}")
 			return False
 		print(f"[{product}] Max/Min Reset (modbus)")
+		return True
+
+	def reset_demand_clear_sync_only(self):
+		"""Demand clear + sync trigger used by Demo Test reset rows."""
+		if self.connect_manager.setup_client is None:
+			print("setup_client媛 ?곌껐?섏뼱 ?덉? ?딆뒿?덈떎.")
+			return False
+
+		product = self.connect_manager.PRODUCT or "A7300"
+		if product == "A2700":
+			return self._a2700_reset_demand_clear_sync_only()
+
+		from config.config_product import get_map_module
+		try:
+			cfg_map = get_map_module(product).ConfigMap
+		except Exception as e:
+			print(f"[reset_demand_clear_sync_only] ConfigMap load failed ({product}): {e}")
+			return False
+
+		def _value(name):
+			try:
+				return getattr(cfg_map, name).value
+			except AttributeError:
+				return None
+
+		def _address(value):
+			if isinstance(value, dict):
+				return value.get("address")
+			if isinstance(value, (tuple, list)):
+				return value[0]
+			return None
+
+		client = self.connect_manager.setup_client
+		values_control = [2300, 0, 1600, 1]
+		try:
+			ctrl_addr = _address(_value("addr_control_lock"))
+			if ctrl_addr is not None:
+				for v in values_control:
+					self.response = client.write_register(ctrl_addr, v)
+					if self._is_error_response(self.response):
+						raise RuntimeError(
+							f"control unlock failed: addr={ctrl_addr}, value={v}, "
+							f"response={self.response}"
+						)
+					time.sleep(0.6)
+
+			commands = [
+				("Demand Reset", "addr_reset_demand"),
+				("Peak Demand Reset", "addr_reset_demand_peak"),
+				("Aggregation Clear", "addr_aggregation_clear"),
+				("Demand Sync", "addr_demand_sync"),
+			]
+			applied = []
+			for label, name in commands:
+				addr = _address(_value(name))
+				if addr is None:
+					continue
+				self.response = client.write_register(addr, 1)
+				if self._is_error_response(self.response):
+					raise RuntimeError(
+						f"{label} failed: addr={addr}, response={self.response}"
+					)
+				applied.append(f"{label}@{addr}")
+				time.sleep(0.2)
+		except Exception as e:
+			print(f"[{product}] reset_demand_clear_sync_only failed: {e}")
+			return False
+
+		if not applied:
+			print(f"[{product}] no Demand reset/sync command mapped")
+			return False
+		print(f"[{product}] Demand clear/sync: {', '.join(applied)}")
+		return True
+
+	def reset_demand_sync_only(self):
+		"""Demand sync trigger used before Demo Test demand checks."""
+		if self.connect_manager.setup_client is None:
+			print("setup_client媛 ?곌껐?섏뼱 ?덉? ?딆뒿?덈떎.")
+			return False
+
+		product = self.connect_manager.PRODUCT or "A7300"
+		if product == "A2700":
+			return self._a2700_reset_demand_sync_only()
+
+		from config.config_product import get_map_module
+		try:
+			cfg_map = get_map_module(product).ConfigMap
+			ctrl_addr = cfg_map.addr_control_lock.value
+			sync_addr = cfg_map.addr_demand_sync.value
+		except Exception as e:
+			print(f"[reset_demand_sync_only] ConfigMap load failed ({product}): {e}")
+			return False
+
+		client = self.connect_manager.setup_client
+		values_control = [2300, 0, 1600, 1]
+		try:
+			for v in values_control:
+				self.response = client.write_register(ctrl_addr[0], v)
+				if self._is_error_response(self.response):
+					raise RuntimeError(
+						f"control unlock failed: addr={ctrl_addr[0]}, value={v}, "
+						f"response={self.response}"
+					)
+				time.sleep(0.6)
+			self.response = client.write_register(sync_addr[0], 1)
+			if self._is_error_response(self.response):
+				raise RuntimeError(
+					f"Demand Sync failed: addr={sync_addr[0]}, response={self.response}"
+				)
+		except Exception as e:
+			print(f"[{product}] reset_demand_sync_only failed: {e}")
+			return False
+		print(f"[{product}] Demand sync: Demand Sync@{sync_addr[0]}")
 		return True
 
 	def reset_max_min(self):

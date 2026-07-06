@@ -2,6 +2,9 @@
 build/
 dist/
 __pycache__/
+node_modules/
+.ultralytics/
+All_AutoTest/
 
 # Python 임베디드 환경 (배포 시에만 동봉)
 python_env/

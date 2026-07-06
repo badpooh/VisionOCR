@@ -129,6 +129,119 @@ def _decode_register_value(registers: list[int], value_type: str):
     raise ValueError(f"unsupported value_type: {value_type}")
 
 
+def _normalize_match_text(text: str) -> str:
+    return "".join(str(text).split()).casefold()
+
+
+def _text_options(spec: str) -> list[str]:
+    return [part.strip() for part in str(spec).split("|") if part.strip()]
+
+
+def _ratio_text_options(spec: str) -> list[str]:
+    return _text_options(spec)
+
+
+def _ratio_text_option_set(ratio_text: list) -> set[str]:
+    options = set()
+    for spec in ratio_text:
+        for option in _ratio_text_options(spec):
+            norm = _normalize_match_text(option)
+            if norm:
+                options.add(norm)
+    return options
+
+
+def _match_ratio_texts(ratio_text: list, ocr_texts: list) -> tuple[bool, list[str]]:
+    ocr_slots = [
+        {"text": str(t).strip(), "norm": _normalize_match_text(t), "used": False}
+        for t in ocr_texts
+        if t and str(t).strip()
+    ]
+    results = []
+    ok = True
+    all_option_norms = set()
+
+    for spec in ratio_text:
+        options = []
+        for option in _ratio_text_options(spec):
+            norm = _normalize_match_text(option)
+            if norm:
+                options.append((norm, option))
+                all_option_norms.add(norm)
+
+        matched = None
+
+        for slot in ocr_slots:
+            if slot["used"]:
+                continue
+            if any(slot["norm"] == norm for norm, _option in options):
+                slot["used"] = True
+                matched = slot["text"]
+                break
+
+        if matched is None:
+            ok = False
+            results.append(f"ratio text '{spec}' -> MISSING")
+            continue
+
+        if len(options) > 1:
+            results.append(f"ratio text '{spec}' -> PASS (matched '{matched}')")
+        else:
+            results.append(f"ratio text '{spec}' -> PASS")
+
+    extras = [
+        slot["text"]
+        for slot in ocr_slots
+        if not slot["used"] and slot["norm"] in all_option_norms
+    ]
+    if extras:
+        ok = False
+        for text, count in Counter(extras).items():
+            suffix = f" x{count}" if count > 1 else ""
+            results.append(f"ratio text unexpected '{text}'{suffix} -> FAIL")
+
+    return ok, results
+
+
+def _match_fixed_texts(expected_texts: list, ocr_texts: list, units: set) -> tuple[bool, list[str]]:
+    ocr_slots = [
+        {"text": str(t).strip(), "norm": _normalize_match_text(t), "used": False}
+        for t in ocr_texts
+        if t and str(t).strip()
+    ]
+    missing = []
+
+    for spec in expected_texts:
+        options = []
+        for option in _text_options(spec):
+            norm = _normalize_match_text(option)
+            if norm:
+                options.append((norm, option))
+
+        matched = False
+        for slot in ocr_slots:
+            if slot["used"]:
+                continue
+            if any(slot["norm"] == norm for norm, _option in options):
+                slot["used"] = True
+                matched = True
+                break
+        if not matched:
+            missing.append(spec)
+
+    extra = []
+    for slot in ocr_slots:
+        if slot["used"] or slot["text"] in units:
+            continue
+        extra.append(slot["text"])
+
+    if extra:
+        for text, count in Counter(extra).items():
+            missing.append(f"[unexpected] {text} x{count}")
+
+    return (len(missing) == 0), missing
+
+
 def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     """단일 케이스 검증.
 
@@ -150,9 +263,8 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
        margin 까지만 PASS. reset_time 없으면 ②③ skip.
     """
     ocr_clean = [t.strip() for t in ocr_texts if t and t.strip()]
-    # joined_norm 은 ratio_text 검증(아래 3단계)에서도 사용 — substring 매칭용.
-    joined_norm = "".join(ocr_clean).replace(" ", "")
-    ratio_text_expected = set(case.get("ratio_text") or [])
+    ratio_text = list(case.get("ratio_text") or [])
+    ratio_text_expected = _ratio_text_option_set(ratio_text)
 
     # 1) fixed_text — multiset 비교 (단위 토큰 / 숫자 / timestamp 자동 제외)
     text_tokens = []
@@ -162,12 +274,9 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
             continue                     # 숫자 토큰 제외
         if _TIMESTAMP_RE.search(t):
             continue                     # timestamp 토큰 제외
-        if t in ratio_text_expected:
+        if _normalize_match_text(t) in ratio_text_expected:
             continue                     # ratio text is validated separately
         text_tokens.append(t)
-
-    ocr_counter = Counter(text_tokens)
-    expected_counter = Counter(case.get("fixed_text") or [])
 
     units = set()
     mu = case.get("meas_unit")
@@ -177,22 +286,13 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     if isinstance(ru, str) and ru.strip():
         units.add(ru.strip())
 
-    missing = []
-    for token, count in expected_counter.items():
-        if ocr_counter[token] < count:
-            missing.append(token)
+    fixed_ok, missing = _match_fixed_texts(
+        list(case.get("fixed_text") or []),
+        text_tokens,
+        units,
+    )
 
-    extra = []
-    for token, count in ocr_counter.items():
-        diff = count - expected_counter.get(token, 0)
-        if diff > 0 and token not in units:
-            extra.append(f"{token} x{diff}")
-
-    fixed_ok = (len(missing) == 0 and len(extra) == 0)
     # 결과 표시용으로 missing 에 extra 도 합쳐 보여줌
-    if extra:
-        missing = list(missing) + [f"[unexpected] {x}" for x in extra]
-
     # 2) meas
     unit = (case.get("meas_unit") or "")
     if isinstance(unit, str):
@@ -245,22 +345,11 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     # 3) ratio — 텍스트 매칭 우선, 비면 숫자 범위로
     ratio_results = []
     ratio_ok = True
-    ratio_text = list(case.get("ratio_text") or [])
     ratio_lows = list(case.get("ratio_low") or [])
     ratio_highs = list(case.get("ratio_high") or [])
 
     if ratio_text:
-        ratio_missing = [
-            t for t in ratio_text
-            if t.replace(" ", "") not in joined_norm
-        ]
-        if ratio_missing:
-            ratio_ok = False
-            for t in ratio_missing:
-                ratio_results.append(f"ratio text '{t}' -> MISSING")
-        else:
-            for t in ratio_text:
-                ratio_results.append(f"ratio text '{t}' -> PASS")
+        ratio_ok, ratio_results = _match_ratio_texts(ratio_text, ocr_clean)
     elif ratio_lows or ratio_highs:
         r_unit = (case.get("ratio_unit") or "")
         if isinstance(r_unit, str):
@@ -399,6 +488,8 @@ class DemoRunner:
             except FileNotFoundError as e:
                 self.log(f"[demo runner] {e}")
                 return _abort_result("[xlsx load]", e)
+        type(self.paddleocr).reset_cache()
+        self.log("[demo runner] OCR cache reset for this run")
         self.log(f"[demo runner] {len(cases)} case(s) ready for {product}")
         self._last_reset_time = None
 
@@ -438,6 +529,11 @@ class DemoRunner:
                 self.modbus_label.test_mode_off()
             except Exception as e:
                 self.log(f"[demo runner] test_mode_off failed: {e}")
+            try:
+                type(self.paddleocr).reset_cache()
+                self.log("[demo runner] OCR cache reset after run")
+            except Exception as e:
+                self.log(f"[demo runner] OCR cache reset failed: {e}")
 
         return results
 
@@ -543,18 +639,38 @@ class DemoRunner:
         # enabled 셀에 'reset' 적은 케이스는 Max/Min reset 만 수행하고
         # 메뉴/OCR/검증은 스킵한다. 이후 timestamp 검증 기준으로도 재사용한다.
         if case.get("is_reset"):
-            self.log(f"[reset] {case['name']} - Max/Min reset")
+            reset_action = case.get("reset_action") or "max_min"
+            is_demand_sync = (reset_action == "demand_sync")
+            is_demand_clear_sync = (reset_action == "demand_clear_sync")
+            is_demand_reset = is_demand_sync or is_demand_clear_sync
+            if is_demand_clear_sync:
+                label = "Demand clear/sync"
+            elif is_demand_sync:
+                label = "Demand sync"
+            else:
+                label = "Max/Min reset"
+            self.log(f"[reset] {case['name']} - {label}")
             try:
                 reset_time = self.modbus_label.system_time_read()
-                ok = self.modbus_label.reset_max_min_only()
+                if is_demand_clear_sync:
+                    ok = self.modbus_label.reset_demand_clear_sync_only()
+                elif is_demand_sync:
+                    ok = self.modbus_label.reset_demand_sync_only()
+                else:
+                    ok = self.modbus_label.reset_max_min_only()
                 if not ok:
-                    return {"name": case["name"], "overall": "ERROR", "error": "Max/Min reset failed"}
+                    return {
+                        "name": case["name"],
+                        "overall": "ERROR",
+                        "error": f"{label} failed",
+                    }
                 self._last_reset_time = reset_time
                 time.sleep(0.3)
             except Exception as e:
                 self.log(f"[reset] failed: {e}")
                 return {"name": case["name"], "overall": "ERROR", "error": str(e)}
-            return {"name": case["name"], "overall": "RESET", "reset_time": reset_time}
+            overall = "DEMAND_RESET" if is_demand_reset else "RESET"
+            return {"name": case["name"], "overall": overall, "reset_time": reset_time}
 
         # reset 컬럼이 truthy 면 메뉴 터치 전에 Modbus 로 디바이스 max/min
         # reset 트리거. 단 system_time_read 를 reset 보다 먼저 호출 — reset_time

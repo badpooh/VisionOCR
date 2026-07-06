@@ -14,7 +14,8 @@ vision/config/demo_test_<product>.xlsx 를 읽어서 케이스 dict 리스트로
     "220; 218; 222"        → [220.0, 218.0, 222.0]    (세미콜론으로 다중)
     빈 셀                  → []
 
-fixed_text / ratio_text 는 콤마 구분.
+fixed_text 는 콤마 구분.
+ratio_text 는 콤마 또는 세미콜론 구분. 각 항목의 A|B 는 A 또는 B 중 하나를 허용.
 reset 은 boolean (TRUE/1/yes/ok = True).
 timestamp_count 는 '4' 또는 '4; 600' (개수; 마진초).
 """
@@ -149,6 +150,9 @@ def _parse_enabled(s) -> str:
         value = s.strip().lower()
         if value == "init":
             return "init"
+        normalized = "".join(ch for ch in value if ch.isalnum())
+        if normalized in ("demandreset", "resetdemand", "demand"):
+            return "demand_reset"
         if value in ("reset", "max/min reset", "maxmin reset", "maxminreset"):
             return "reset"
     if s is False:
@@ -202,10 +206,31 @@ def _parse_count_and_margin(s):
     return (count, margin)
 
 
+def _reset_action(name: str, state: str) -> str:
+    normalized_name = "".join(
+        ch for ch in str(name or "").lower()
+        if ch.isalnum()
+    )
+    if state == "demand_reset":
+        return "demand_sync" if "sync" in normalized_name else "demand_clear_sync"
+    if state != "reset":
+        return ""
+    if "demand" in normalized_name:
+        return "demand_sync" if "sync" in normalized_name else "demand_clear_sync"
+    return "max_min"
+
+
 def _parse_fixed_text(s) -> list:
     if s is None:
         return []
     return [t.strip() for t in str(s).split(",") if t.strip()]
+
+
+def _parse_ratio_text(s) -> list:
+    if s is None:
+        return []
+    text = str(s).replace(";", ",")
+    return [t.strip() for t in text.split(",") if t.strip()]
 
 
 def _xlsx_path(product: str) -> str:
@@ -249,10 +274,12 @@ def load_demo_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
         if state == "disabled":
             continue
         ts_count, ts_margin = _parse_count_and_margin(record.get("timestamp_count"))
+        reset_action = _reset_action(record.get("name"), state)
         cases.append({
             "name": str(record["name"]).strip(),
             "is_init": (state == "init"),
-            "is_reset": (state == "reset"),
+            "is_reset": (state in ("reset", "demand_reset")),
+            "reset_action": reset_action,
             "main_menu_label": record.get("main_menu_label"),
             "main_menu_xy":    _parse_xy_list(record.get("main_menu_xy")),
             "side_menu_label": record.get("side_menu_label"),
@@ -277,7 +304,7 @@ def load_demo_cases(product: str = "A3700N", xlsx_path: str = None) -> list:
             # 매칭, 아니면 ratio_low/high 범위. 둘 다 비면 검증 skip.
             "ratio_low":       _parse_num_list(record.get("ratio_low")),
             "ratio_high":      _parse_num_list(record.get("ratio_high")),
-            "ratio_text":      _parse_fixed_text(record.get("ratio_text")),
+            "ratio_text":      _parse_ratio_text(record.get("ratio_text")),
             "ratio_unit":      record.get("ratio_unit"),
             # reset: truthy 면 메뉴 터치 전에 Modbus 로 디바이스 max/min reset
             # 트리거 → system_time_read 로 reset_time 기록. timestamp 검증의

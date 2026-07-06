@@ -1,6 +1,9 @@
 import cv2
+import gc
 import os
 import sys
+import threading
+import traceback
 
 from pathlib import Path
 from ultralytics import YOLO
@@ -361,36 +364,70 @@ class PaddleOCRManager:
     # 클래스 레벨 OCR 인스턴스 캐시 — PaddleOCR 생성은 모델 로드를 동반해
     # 무겁다. 설정이 고정이므로 프로세스당 1회만 생성해 재사용한다.
     _ocr_instance = None
+    _ocr_instances = {}
+    _ocr_lock = threading.Lock()
 
     def __init__(self):
         pass
 
     @classmethod
+    def reset_cache(cls, thread_id=None):
+        with cls._ocr_lock:
+            if thread_id is None:
+                old_instances = list(cls._ocr_instances.values())
+                cls._ocr_instances.clear()
+                if cls._ocr_instance is not None:
+                    old_instances.append(cls._ocr_instance)
+                cls._ocr_instance = None
+            else:
+                old_ocr = cls._ocr_instances.pop(thread_id, None)
+                old_instances = [old_ocr] if old_ocr is not None else []
+                if cls._ocr_instance is old_ocr:
+                    cls._ocr_instance = None
+        for old_ocr in old_instances:
+            if old_ocr is not None:
+                del old_ocr
+        gc.collect()
+
+    @classmethod
     def _get_ocr(cls):
-        if cls._ocr_instance is None:
-            execution_directory = os.getcwd()
+        thread_id = threading.get_ident()
+        ocr = cls._ocr_instances.get(thread_id)
+        if ocr is not None:
+            return ocr
 
-            rec_model_folder_path = os.path.join(
-                execution_directory, 'ppocr', 'rec', 'en_PP-OCRv5_mobile_rec_infer')
-            rec_model_folder_path = os.path.normpath(
-                rec_model_folder_path).replace('\\', '/')
+        with cls._ocr_lock:
+            ocr = cls._ocr_instances.get(thread_id)
+            if ocr is None:
+                ocr = cls._create_ocr()
+                cls._ocr_instances[thread_id] = ocr
+                cls._ocr_instance = ocr
+            return ocr
 
-            det_model_folder_path = os.path.join(
-                execution_directory, 'ppocr', 'det', 'PP-OCRv5_server_det_infer')
-            det_model_folder_path = os.path.normpath(
-                det_model_folder_path).replace('\\', '/')
+    @classmethod
+    def _create_ocr(cls):
+        execution_directory = os.getcwd()
 
-            cls._ocr_instance = PaddleOCR(
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-                text_detection_model_name="PP-OCRv5_server_det",
-                text_detection_model_dir=det_model_folder_path,
-                text_recognition_model_name="en_PP-OCRv5_mobile_rec",
-                text_recognition_model_dir=rec_model_folder_path,
-                lang='en',
-            )
-        return cls._ocr_instance
+        rec_model_folder_path = os.path.join(
+            execution_directory, 'ppocr', 'rec', 'en_PP-OCRv5_mobile_rec_infer')
+        rec_model_folder_path = os.path.normpath(
+            rec_model_folder_path).replace('\\', '/')
+
+        det_model_folder_path = os.path.join(
+            execution_directory, 'ppocr', 'det', 'PP-OCRv5_server_det_infer')
+        det_model_folder_path = os.path.normpath(
+            det_model_folder_path).replace('\\', '/')
+
+        return PaddleOCR(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            text_detection_model_name="PP-OCRv5_server_det",
+            text_detection_model_dir=det_model_folder_path,
+            text_recognition_model_name="en_PP-OCRv5_mobile_rec",
+            text_recognition_model_dir=rec_model_folder_path,
+            lang='en',
+        )
 
     def _split_known_pairs(self, texts):
         """OCR 이 한 토큰으로 묶어 잡은 알려진 라벨 쌍을 분리.
@@ -410,10 +447,46 @@ class PaddleOCRManager:
                 out.append(t)
         return out
 
+    def _normalize_crop(self, img):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        height, width = img.shape[:2]
+        scale = max(1.0, 48.0 / max(height, 1), 64.0 / max(width, 1))
+        if scale > 1.0:
+            img = cv2.resize(
+                img,
+                (int(width * scale), int(height * scale)),
+                interpolation=cv2.INTER_CUBIC,
+            )
+        return img
+
+    def _joined_text_from_prediction(self, pred_list, min_score):
+        joined_text = ""
+        if pred_list:
+            r_obj = pred_list[0]
+            if hasattr(r_obj, "to_dict"):
+                r = r_obj.to_dict().get("res", {})
+            elif hasattr(r_obj, "res"):
+                r = r_obj.res
+            elif isinstance(r_obj, dict):
+                r = r_obj.get("res", r_obj)
+            else:
+                r = {}
+
+            rec_texts = r.get("rec_texts", []) or []
+            rec_scores = r.get("rec_scores", []) or []
+
+            collected = []
+            for text, score in zip(rec_texts, rec_scores):
+                t = (text or "").strip()
+                if t and float(score) >= min_score:
+                    collected.append(t)
+
+            joined_text = " ".join(collected).strip()
+        return joined_text
+
     def paddleocr_basic(self, image, boxes=None):
         img_path = image  # 원본 경로 보존 (로그용)
-
-        ocr = self._get_ocr()
 
         ocr_results = []
         min_score = 0.3  # 필요 시 조정
@@ -425,11 +498,11 @@ class PaddleOCRManager:
                 ocr_results.append("")
                 continue
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            img = self._normalize_crop(img)
 
             try:
                 # predict 호출 (input 키워드 안 써도 됨)
+                ocr = self._get_ocr()
                 pred_list = ocr.predict(img)
 
                 joined_text = ""  # 기본값
@@ -465,8 +538,25 @@ class PaddleOCRManager:
                 print(f"[{i}] {[i]} -> {joined_text}")
 
             except Exception as e:
-                print(f"OCR Error on image {i}: {str(e)}")
-                ocr_results.append("")
+                print(
+                    f"OCR Error on image {i}: {repr(e)} "
+                    f"shape={getattr(img, 'shape', None)}; reset and retry once"
+                )
+                type(self).reset_cache(thread_id=threading.get_ident())
+                try:
+                    ocr = self._get_ocr()
+                    pred_list = ocr.predict(img)
+                    joined_text = self._joined_text_from_prediction(pred_list, min_score)
+                    ocr_results.append(joined_text)
+                    print(f"[{i}] retry -> {joined_text}")
+                except Exception as retry_error:
+                    print(
+                        f"OCR retry failed on image {i}: {repr(retry_error)} "
+                        f"shape={getattr(img, 'shape', None)}"
+                    )
+                    if os.environ.get("VISIONOCR_OCR_TRACEBACK") == "1":
+                        traceback.print_exc()
+                    ocr_results.append("")
 
         if boxes is not None:
             # boxes 동봉 호출 (Setup 등): _split_known_pairs 적용 안 함 — 토큰

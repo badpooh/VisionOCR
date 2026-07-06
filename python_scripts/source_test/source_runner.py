@@ -52,6 +52,7 @@ class SourceTestRunner:
             "save_dir": save_dir,
         }
         try:
+            self._prepare_setup_connection(cases)
             for idx, case in enumerate(cases, 1):
                 if self.stop_event.is_set():
                     break
@@ -199,6 +200,62 @@ class SourceTestRunner:
             self._write_setting(item)
             time.sleep(0.15)
 
+    def _prepare_setup_connection(self, cases: list[dict] | None = None, *, force: bool = False) -> bool:
+        if not force and not self._cases_need_setup_client(cases or []):
+            return True
+
+        if not self.connect_manager.SERVER_IP or not self.connect_manager.SETUP_PORT:
+            self._load_saved_connection_settings()
+
+        ip = self.connect_manager.SERVER_IP
+        setup_port = self.connect_manager.SETUP_PORT
+        if not ip or not setup_port:
+            self.log("[modbus] setup connection information is missing.")
+            return False
+
+        try:
+            self.connect_manager.tcp_connect()
+        except Exception as exc:
+            self.log(f"[modbus] setup reconnect failed: {exc}")
+            return False
+
+        ok = self.connect_manager.setup_client is not None and self.connect_manager.is_connected
+        product = self.connect_manager.PRODUCT or "A7300"
+        if ok:
+            self.log(f"[modbus] worker setup connection ready ({product} {ip}:{setup_port})")
+        else:
+            self.log(f"[modbus] worker setup connection failed ({product} {ip}:{setup_port})")
+        return ok
+
+    def _cases_need_setup_client(self, cases: list[dict]) -> bool:
+        for case in cases:
+            if case.get("setup_modbus") or case.get("measurement_modbus"):
+                return True
+        return False
+
+    def _load_saved_connection_settings(self):
+        try:
+            from models import config as app_config
+            from models.database import load_setting
+
+            product = load_setting(app_config.KEY_PRODUCT)
+            if product and product != self.connect_manager.PRODUCT:
+                self.connect_manager.set_product(product)
+
+            ip = load_setting(app_config.KEY_TCP_IP)
+            if ip and not self.connect_manager.SERVER_IP:
+                self.connect_manager.ip_connect(ip)
+
+            setup_port = load_setting(app_config.KEY_SETUP_PORT)
+            if setup_port and not self.connect_manager.SETUP_PORT:
+                self.connect_manager.sp_update(int(setup_port))
+
+            touch_port = load_setting(app_config.KEY_TOUCH_PORT)
+            if touch_port and not self.connect_manager.TOUCH_PORT:
+                self.connect_manager.tp_update(int(touch_port))
+        except Exception as exc:
+            self.log(f"[modbus] loading saved connection settings failed: {exc}")
+
     def _unlock_setup(self):
         """(공용 로직: function/modbus_unlock.py — 스펙은 제품 config 모듈)
 
@@ -210,8 +267,16 @@ class SourceTestRunner:
         if client is None:
             return
         product = self.connect_manager.PRODUCT or "A7300"
-        if not unlock_setup(client, product, log=self.log):
-            raise RuntimeError(f"setup unlock failed ({product})")
+        if unlock_setup(client, product, log=self.log):
+            return
+
+        self.log(f"[unlock] setup unlock failed ({product}); reconnecting setup client and retrying once")
+        if self._prepare_setup_connection(force=True):
+            client = self.connect_manager.setup_client
+            if client is not None and unlock_setup(client, product, log=self.log):
+                return
+
+        raise RuntimeError(f"setup unlock failed ({product})")
 
     def _write_setting(self, item: dict):
         client = self.connect_manager.setup_client
