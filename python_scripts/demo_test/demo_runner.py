@@ -26,6 +26,8 @@ import traceback
 from collections import Counter
 from datetime import datetime, timedelta
 
+from function import ocr_eval_helpers as ocr_eval
+
 from .demo_xlsx_loader import load_demo_cases
 
 
@@ -262,21 +264,9 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
        reset_time 이후, ③ timestamp_margin_sec 이 있으면 reset_time +
        margin 까지만 PASS. reset_time 없으면 ②③ skip.
     """
-    ocr_clean = [t.strip() for t in ocr_texts if t and t.strip()]
+    ocr_clean = ocr_eval.clean_tokens(ocr_texts)
     ratio_text = list(case.get("ratio_text") or [])
-    ratio_text_expected = _ratio_text_option_set(ratio_text)
-
-    # 1) fixed_text — multiset 비교 (단위 토큰 / 숫자 / timestamp 자동 제외)
-    text_tokens = []
-    for t in ocr_clean:
-        v, _ = _parse_numeric(t)
-        if v is not None:
-            continue                     # 숫자 토큰 제외
-        if _TIMESTAMP_RE.search(t):
-            continue                     # timestamp 토큰 제외
-        if _normalize_match_text(t) in ratio_text_expected:
-            continue                     # ratio text is validated separately
-        text_tokens.append(t)
+    ratio_text_expected = ocr_eval.ratio_text_option_set(ratio_text)
 
     units = set()
     mu = case.get("meas_unit")
@@ -286,7 +276,12 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     if isinstance(ru, str) and ru.strip():
         units.add(ru.strip())
 
-    fixed_ok, missing = _match_fixed_texts(
+    text_tokens = ocr_eval.fixed_text_tokens(
+        ocr_clean,
+        units,
+        ignored_norms=ratio_text_expected,
+    )
+    fixed_ok, missing = ocr_eval.match_fixed_texts(
         list(case.get("fixed_text") or []),
         text_tokens,
         units,
@@ -303,7 +298,9 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     # 위치 기반 단위 매칭 — 분리 숫자가 다음에 먼저 등장하는 단위 토큰을
     # 보고 자기 단위인지 결정. ratio_unit 과 meas_unit 이 같이 있을 때도
     # 정확히 분리됨.
-    numeric_hits = _collect_unit_hits(ocr_clean, unit, case.get("ratio_unit"))
+    numeric_hits = ocr_eval.collect_unit_hits(
+        ocr_clean, unit, case.get("ratio_unit")
+    )
 
     meas_results = []
     meas_ok = True
@@ -349,14 +346,14 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     ratio_highs = list(case.get("ratio_high") or [])
 
     if ratio_text:
-        ratio_ok, ratio_results = _match_ratio_texts(ratio_text, ocr_clean)
+        ratio_ok, ratio_results = ocr_eval.match_ratio_texts(ratio_text, ocr_clean)
     elif ratio_lows or ratio_highs:
         r_unit = (case.get("ratio_unit") or "")
         if isinstance(r_unit, str):
             r_unit = r_unit.strip()
         # meas 와 동일 위치 기반 매칭. other_unit=meas_unit 으로 분리 숫자
         # 충돌 방지.
-        r_hits = _collect_unit_hits(ocr_clean, r_unit, case.get("meas_unit"))
+        r_hits = ocr_eval.collect_unit_hits(ocr_clean, r_unit, case.get("meas_unit"))
 
         if len(ratio_lows) != len(ratio_highs):
             ratio_results.append(
@@ -396,7 +393,7 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     ts_ok = True
     ts_count_expected = case.get("timestamp_count")
     if ts_count_expected is not None:
-        ts_hits = _extract_timestamps(ocr_clean)
+        ts_hits = ocr_eval.extract_timestamps(ocr_clean)
         if len(ts_hits) != ts_count_expected:
             ts_results.append(
                 f"timestamp 개수 mismatch: expected={ts_count_expected} found={len(ts_hits)}"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import shutil
 import struct
 import threading
@@ -12,6 +11,7 @@ from datetime import datetime
 
 from demo_test.demo_process import get_image_directory
 from external.cmengine import CMEngine
+from function import ocr_eval_helpers as ocr_eval
 from function.func_connection import ConnectionManager
 from function.func_evaluation import Evaluation
 from function.func_ocr import PaddleOCRManager, YoloManager
@@ -462,10 +462,8 @@ class SourceTestRunner:
             if item.get("unit") is not None and str(item.get("unit")).strip()
         }
         ocr_tokens = [text for text, _box in ocr_with_boxes if text]
-        fixed_tokens = _fixed_text_tokens(ocr_tokens, units)
-        missing, extra = _compare_fixed_texts(fixed_tokens, required_texts)
-        ok = not missing and not extra
-        details = list(missing) + [f"[unexpected] {item}" for item in extra]
+        fixed_tokens = ocr_eval.fixed_text_tokens(ocr_tokens, units)
+        ok, details = ocr_eval.match_fixed_texts(required_texts, fixed_tokens)
 
         return {
             "tc_id": case.get("tc_id"),
@@ -491,10 +489,11 @@ class SourceTestRunner:
         required = check.get("required_text") or ""
         tokens = _select_ocr_tokens(ocr_with_boxes, required, roi)
         joined = " ".join(tokens)
-        label_ok = (not required) or _contains_required(joined, required)
+        label_ok = (not required) or ocr_eval.contains_required(joined, required)
 
-        actual = _first_number(joined)
         expected = check.get("expected")
+        unit = check.get("unit") or ""
+        actual = ocr_eval.measurement_number(tokens, unit)
         numeric_ok = True
         error = None
         limit = None
@@ -506,7 +505,6 @@ class SourceTestRunner:
                 limit = _percent_limit(float(expected), check.get("tolerance"))
                 numeric_ok = abs(error) <= limit
 
-        unit = check.get("unit") or ""
         unit_ok = (not unit) or (unit in joined)
         overall = "PASS" if label_ok and numeric_ok and unit_ok else "FAIL"
         return {
@@ -603,58 +601,6 @@ def _inside_roi(box, roi) -> bool:
     return roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]
 
 
-def _fixed_text_tokens(ocr_tokens: list[str], units: set[str]) -> list[str]:
-    out = []
-    for token in ocr_tokens:
-        text = str(token).strip()
-        if not text:
-            continue
-        if _is_number_token(text):
-            continue
-        if _looks_like_timestamp(text):
-            continue
-        if text in units:
-            continue
-        out.append(text)
-    return out
-
-
-def _compare_fixed_texts(ocr_tokens: list[str], required_texts: list[str]):
-    used = set()
-    missing = []
-
-    for expected in required_texts:
-        match_idx = None
-        for idx, token in enumerate(ocr_tokens):
-            if idx in used:
-                continue
-            if _contains_required(token, str(expected)):
-                match_idx = idx
-                break
-        if match_idx is None:
-            missing.append(str(expected))
-        else:
-            used.add(match_idx)
-
-    extra = []
-    for idx, token in enumerate(ocr_tokens):
-        if idx not in used:
-            extra.append(f"{token} x1")
-    return missing, extra
-
-
-def _looks_like_timestamp(text: str) -> bool:
-    value = str(text or "")
-    return bool(
-        re.search(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", value)
-        or re.search(r"\d{1,2}:\d{2}(?::\d{2})?", value)
-    )
-
-
-def _is_number_token(text: str) -> bool:
-    return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?", str(text or "").strip()))
-
-
 def _select_ocr_tokens(ocr_with_boxes, required: str, roi):
     if required:
         row_tokens = _tokens_on_required_row(ocr_with_boxes, required)
@@ -673,7 +619,7 @@ def _select_ocr_tokens(ocr_with_boxes, required: str, roi):
 def _tokens_on_required_row(ocr_with_boxes, required: str) -> list[str]:
     anchors = []
     for text, box in ocr_with_boxes:
-        if text and _contains_required(text, required):
+        if text and ocr_eval.contains_required(text, required):
             anchors.append((text, box))
     if not anchors:
         return []
@@ -706,40 +652,6 @@ def _box_center_x(box) -> float:
 
 def _box_center_y(box) -> float:
     return (float(box[1]) + float(box[3])) / 2
-
-
-def _contains_required(text: str, required: str) -> bool:
-    haystack = _normalize_required_text(text)
-    words = None
-    for candidate in _required_candidates(required):
-        if candidate.isascii() and candidate.isalnum() and len(candidate) <= 3:
-            if words is None:
-                words = {
-                    _normalize_required_text(word)
-                    for word in re.findall(r"[0-9A-Za-z]+", str(text or ""))
-                }
-            if candidate in words:
-                return True
-        elif candidate in haystack:
-            return True
-    return False
-
-
-def _required_candidates(required: str) -> list[str]:
-    value = _normalize_required_text(required)
-    candidates = [value] if value else []
-    if value.startswith("v") and len(value) > 1:
-        candidates.append(value[1:])
-    return candidates
-
-
-def _normalize_required_text(text: str) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(text or "")).lower()
-
-
-def _first_number(text: str):
-    match = re.search(r"[-+]?\d+(?:\.\d+)?", text or "")
-    return float(match.group(0)) if match else None
 
 
 def _percent_limit(expected: float, tolerance):
