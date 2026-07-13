@@ -18,6 +18,9 @@ from function.func_ocr import PaddleOCRManager, YoloManager
 from function.func_touch import TouchManager
 
 
+_UNSET = object()
+
+
 class SourceTestRunner:
     """Runs CMC-driven display function tests."""
 
@@ -138,7 +141,9 @@ class SourceTestRunner:
             # OCR 기반 검증이 필요한데 스크린샷/OCR 단계 자체가 실패했으면
             # 빈 토큰으로 비교(오판 위험)하지 않고 명시적 ERROR row 로 남긴다.
             needs_ocr = any(
-                item.get("required_text") or item.get("expected") is not None
+                item.get("required_text")
+                or item.get("expected") is not None
+                or item.get("is_ratio")
                 for item in expected
             )
             if ocr_error and needs_ocr:
@@ -167,10 +172,25 @@ class SourceTestRunner:
             )
             if fixed_result is not None:
                 rows.append(fixed_result)
-            for check in expected:
-                if check.get("expected") is None:
+            ratio_result = self._evaluate_ratio(
+                case, output, expected, image_path, ocr_with_boxes
+            )
+            if ratio_result is not None:
+                rows.append(ratio_result)
+            ordered_actuals = self._ordered_ratio_measurements(
+                expected, ocr_with_boxes
+            )
+            for check_index, check in enumerate(expected):
+                if check.get("is_ratio") or check.get("expected") is None:
                     continue
-                rows.append(self._evaluate(case, output, check, image_path, ocr_with_boxes))
+                rows.append(self._evaluate(
+                    case,
+                    output,
+                    check,
+                    image_path,
+                    ocr_with_boxes,
+                    actual_override=ordered_actuals.get(check_index, _UNSET),
+                ))
 
         try:
             self.cmc.out_off()
@@ -451,7 +471,7 @@ class SourceTestRunner:
         required_texts = [
             item.get("required_text")
             for item in expected
-            if item.get("required_text")
+            if item.get("required_text") and not item.get("is_ratio")
         ]
         if not required_texts:
             return None
@@ -461,8 +481,23 @@ class SourceTestRunner:
             for item in expected
             if item.get("unit") is not None and str(item.get("unit")).strip()
         }
+        units.update(
+            str(item.get("ratio_unit") or "").strip()
+            for item in expected
+            if str(item.get("ratio_unit") or "").strip()
+        )
         ocr_tokens = [text for text, _box in ocr_with_boxes if text]
-        fixed_tokens = ocr_eval.fixed_text_tokens(ocr_tokens, units)
+        ratio_text = [
+            spec
+            for item in expected
+            if item.get("is_ratio")
+            for spec in (item.get("ratio_text") or [])
+        ]
+        fixed_tokens = ocr_eval.fixed_text_tokens(
+            ocr_tokens,
+            units,
+            ignored_norms=ocr_eval.ratio_text_option_set(ratio_text),
+        )
         ok, details = ocr_eval.match_fixed_texts(required_texts, fixed_tokens)
 
         return {
@@ -484,7 +519,148 @@ class SourceTestRunner:
             "image_path": image_path,
         }
 
-    def _evaluate(self, case, output, check, image_path, ocr_with_boxes) -> dict:
+    def _evaluate_ratio(self, case, output, expected, image_path, ocr_with_boxes):
+        ratio_checks = [item for item in expected if item.get("is_ratio")]
+        if not ratio_checks:
+            return None
+
+        ratio_text = [
+            spec
+            for item in ratio_checks
+            for spec in (item.get("ratio_text") or [])
+        ]
+        ratio_lows = [
+            value
+            for item in ratio_checks
+            for value in (item.get("ratio_low") or [])
+        ]
+        ratio_highs = [
+            value
+            for item in ratio_checks
+            for value in (item.get("ratio_high") or [])
+        ]
+        ratio_unit = next(
+            (str(item.get("ratio_unit") or "").strip() for item in ratio_checks
+             if str(item.get("ratio_unit") or "").strip()),
+            "",
+        )
+        other_unit = next(
+            (str(item.get("unit") or "").strip() for item in expected
+             if not item.get("is_ratio")
+             and str(item.get("unit") or "").strip()
+             and str(item.get("unit") or "").strip() != ratio_unit),
+            "",
+        )
+        ocr_tokens = [text for text, _box in ocr_with_boxes if text]
+        ok, details, hits = ocr_eval.evaluate_ratio(
+            ocr_tokens,
+            ratio_text=ratio_text,
+            ratio_lows=ratio_lows,
+            ratio_highs=ratio_highs,
+            ratio_unit=ratio_unit,
+            other_unit=other_unit,
+        )
+        if ratio_text:
+            expected_text = "; ".join(str(item) for item in ratio_text)
+            actual_text = ""
+        else:
+            expected_text = "; ".join(
+                f"{low:g}~{high:g}"
+                for low, high in zip(ratio_lows, ratio_highs)
+            )
+            actual_text = " | ".join(text for text, _value in hits)
+
+        return {
+            "tc_id": case.get("tc_id"),
+            "test_name": case.get("name"),
+            "source_name": output.get("name"),
+            "check_name": "Ratio",
+            "expected": expected_text,
+            "actual": actual_text,
+            "unit": ratio_unit,
+            "tolerance": "",
+            "tolerance_type": "range" if not ratio_text else "text",
+            "error": "; ".join(details),
+            "limit": "",
+            "label_ok": True,
+            "unit_ok": True if ratio_text else bool(hits),
+            "overall": "PASS" if ok else "FAIL",
+            "ocr_text": " | ".join(ocr_tokens),
+            "image_path": image_path,
+        }
+
+    def _ordered_ratio_measurements(self, expected, ocr_with_boxes) -> dict:
+        ratio_text = [
+            spec
+            for item in expected
+            if item.get("is_ratio")
+            for spec in (item.get("ratio_text") or [])
+        ]
+        if not ratio_text:
+            return {}
+
+        checks = [
+            (index, item)
+            for index, item in enumerate(expected)
+            if not item.get("is_ratio")
+            and item.get("expected") is not None
+            and not item.get("required_text")
+            and item.get("roi_xy") is None
+        ]
+        if len(checks) != len(ratio_text):
+            return {}
+
+        units = {
+            str(item.get("unit") or "").strip()
+            for _index, item in checks
+        }
+        if len(units) != 1:
+            return {}
+
+        unit = units.pop()
+        lows = []
+        highs = []
+        for _index, item in checks:
+            expected_value = float(item.get("expected"))
+            limit = _percent_limit(expected_value, item.get("tolerance"))
+            lows.append(expected_value - limit)
+            highs.append(expected_value + limit)
+
+        ocr_tokens = [text for text, _box in ocr_with_boxes if text]
+        _ok, _details, hits = ocr_eval.evaluate_measurements(
+            ocr_tokens,
+            lows,
+            highs,
+            unit=unit,
+        )
+
+        if len(checks) == 1:
+            selected = next(
+                (
+                    value
+                    for _text, value in hits
+                    if lows[0] <= value <= highs[0]
+                ),
+                hits[0][1] if hits else None,
+            )
+            return {checks[0][0]: selected}
+
+        if len(hits) != len(checks):
+            return {index: None for index, _item in checks}
+        return {
+            index: value
+            for (index, _item), (_text, value) in zip(checks, hits)
+        }
+
+    def _evaluate(
+        self,
+        case,
+        output,
+        check,
+        image_path,
+        ocr_with_boxes,
+        actual_override=_UNSET,
+    ) -> dict:
         roi = check.get("roi_xy")
         required = check.get("required_text") or ""
         tokens = _select_ocr_tokens(ocr_with_boxes, required, roi)
@@ -493,7 +669,11 @@ class SourceTestRunner:
 
         expected = check.get("expected")
         unit = check.get("unit") or ""
-        actual = ocr_eval.measurement_number(tokens, unit)
+        actual = (
+            ocr_eval.measurement_number(tokens, unit)
+            if actual_override is _UNSET
+            else actual_override
+        )
         numeric_ok = True
         error = None
         limit = None
@@ -681,7 +861,7 @@ def _first_failure_summary(rows: list[dict]) -> str:
 
         if status == "ERROR" and error not in (None, ""):
             detail = str(error).split(";", 1)[0].strip()
-        elif check_name == "Fixed Text" and error not in (None, ""):
+        elif check_name in ("Fixed Text", "Ratio") and error not in (None, ""):
             detail = str(error).split(";", 1)[0].strip()
         elif row.get("label_ok") is False:
             detail = "required text not found"

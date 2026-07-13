@@ -25,6 +25,7 @@ NAV_HEADERS = [
 EXPECTED_HEADERS = [
     "TC_ID", "Source Name", "Check Name", "Expected", "Unit",
     "Tolerance", "roi_xy", "Required Text", "Notes",
+    "ratio_range", "ratio_text", "ratio_unit",
 ]
 
 BUTTON_KEYINS = {
@@ -196,6 +197,11 @@ def save_sequence(path: str, cases: list[dict]):
                 _roi_to_text(item.get("roi_xy")),
                 item.get("required_text", ""),
                 item.get("notes", ""),
+                _ratio_ranges_to_text(
+                    item.get("ratio_low"), item.get("ratio_high")
+                ),
+                "; ".join(item.get("ratio_text") or []),
+                item.get("ratio_unit", ""),
             ])
 
     for sheet in wb.worksheets:
@@ -307,17 +313,69 @@ def _navigation_from_row(row: dict) -> dict:
 
 
 def _expected_from_row(row: dict) -> dict:
+    check_name = _text(row, "Check Name", "Check")
+    ratio_check = _is_ratio_check(check_name)
+    ratio_low, ratio_high = _parse_ratio_ranges(row.get("ratio_range"))
+    ratio_text = _parse_ratio_text(row.get("ratio_text"))
+    ratio_unit = _text(row, "ratio_unit")
+    is_ratio = ratio_check or bool(ratio_low or ratio_high or ratio_text or ratio_unit)
+    required_text = _text(row, "Required Text")
     return {
         "source_name": _text(row, "Source Name"),
-        "check_name": _text(row, "Check Name", "Check"),
-        "expected": _float(row.get("Expected"), None),
+        "check_name": check_name,
+        "expected": None if ratio_check else _float(row.get("Expected"), None),
         "unit": _text(row, "Unit"),
         "tolerance_type": "percent",
-        "tolerance": _float(row.get("Tolerance"), 0),
+        "tolerance": None if ratio_check else _float(row.get("Tolerance"), 0),
         "roi_xy": _parse_roi(row.get("roi_xy")),
-        "required_text": _text(row, "Required Text"),
+        "required_text": "" if ratio_check else required_text,
+        "is_ratio": is_ratio,
+        "ratio_low": ratio_low,
+        "ratio_high": ratio_high,
+        "ratio_text": ratio_text,
+        "ratio_unit": ratio_unit,
         "notes": _text(row, "Notes"),
     }
+
+
+def _is_ratio_check(check_name: str) -> bool:
+    normalized = re.sub(r"[\s_-]+", "", str(check_name or "")).casefold()
+    return normalized.startswith("ratio") or normalized.startswith("\ube44\uc728")
+
+
+def _parse_ratio_ranges(value) -> tuple[list[float], list[float]]:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return [], []
+
+    lows = []
+    highs = []
+    number = r"[-+]?\d+(?:\.\d+)?"
+    for part in re.split(r"[;,]", text):
+        token = part.strip()
+        if not token:
+            continue
+        match = re.fullmatch(rf"({number})\s*(?:~|\.\.)\s*({number})", token)
+        if match:
+            low, high = float(match.group(1)), float(match.group(2))
+        else:
+            low = high = float(token)
+        lows.append(low)
+        highs.append(high)
+    return lows, highs
+
+
+def _parse_ratio_text(value) -> list[str]:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"[;,]", text) if part.strip()]
+
+
+def _ratio_ranges_to_text(lows, highs) -> str:
+    return "; ".join(
+        f"{low:g}~{high:g}" for low, high in zip(lows or [], highs or [])
+    )
 
 
 def _text(row: dict, key: str, default="") -> str:

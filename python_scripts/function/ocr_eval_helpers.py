@@ -215,6 +215,90 @@ def match_ratio_texts(ratio_text: list, ocr_texts: list) -> tuple[bool, list[str
     return ok, results
 
 
+def match_numeric_ranges(
+    hits: list,
+    lows: list,
+    highs: list,
+    label: str = "ratio",
+) -> tuple[bool, list[str]]:
+    lows = list(lows or [])
+    highs = list(highs or [])
+    results = []
+
+    if not lows and not highs:
+        return True, results
+    if len(lows) != len(highs):
+        return False, [
+            f"{label} low/high count mismatch: low={len(lows)} high={len(highs)}"
+        ]
+
+    threshold_count = len(lows)
+    hit_count = len(hits)
+    if threshold_count == 1:
+        low, high = lows[0], highs[0]
+        pass_count = 0
+        for text, value in hits:
+            if low <= value <= high:
+                pass_count += 1
+                results.append(f"{label} '{text}' -> PASS")
+            else:
+                results.append(
+                    f"{label} '{text}' -> FAIL (range {low}~{high})"
+                )
+        return pass_count > 0, results
+
+    if threshold_count != hit_count:
+        return False, [
+            f"{label} range count {threshold_count} != OCR match {hit_count}"
+        ]
+
+    ok = True
+    for (text, value), low, high in zip(hits, lows, highs):
+        if low <= value <= high:
+            results.append(f"{label} '{text}' -> PASS (range {low}~{high})")
+        else:
+            results.append(f"{label} '{text}' -> FAIL (range {low}~{high})")
+            ok = False
+    return ok, results
+
+
+def evaluate_measurements(
+    ocr_texts: list,
+    lows: list,
+    highs: list,
+    unit: str = "",
+    other_unit: str = "",
+) -> tuple[bool, list[str], list]:
+    clean = clean_tokens(ocr_texts)
+    hits = collect_unit_hits(clean, unit, other_unit)
+    ok, results = match_numeric_ranges(hits, lows, highs, label="measurement")
+    return ok, results, hits
+
+
+def evaluate_ratio(
+    ocr_texts: list,
+    ratio_text: list | None = None,
+    ratio_lows: list | None = None,
+    ratio_highs: list | None = None,
+    ratio_unit: str = "",
+    other_unit: str = "",
+) -> tuple[bool, list[str], list]:
+    clean = clean_tokens(ocr_texts)
+    text_rules = list(ratio_text or [])
+    if text_rules:
+        ok, results = match_ratio_texts(text_rules, clean)
+        return ok, results, []
+
+    lows = list(ratio_lows or [])
+    highs = list(ratio_highs or [])
+    if not lows and not highs:
+        return True, [], []
+
+    hits = collect_unit_hits(clean, ratio_unit, other_unit)
+    ok, results = match_numeric_ranges(hits, lows, highs, label="ratio")
+    return ok, results, hits
+
+
 def ratio_text_option_set(ratio_text: list) -> set[str]:
     options = set()
     for spec in ratio_text:

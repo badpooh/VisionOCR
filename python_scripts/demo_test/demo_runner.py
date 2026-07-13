@@ -295,49 +295,13 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     lows = list(case.get("meas_low") or [])
     highs = list(case.get("meas_high") or [])
 
-    # 위치 기반 단위 매칭 — 분리 숫자가 다음에 먼저 등장하는 단위 토큰을
-    # 보고 자기 단위인지 결정. ratio_unit 과 meas_unit 이 같이 있을 때도
-    # 정확히 분리됨.
-    numeric_hits = ocr_eval.collect_unit_hits(
-        ocr_clean, unit, case.get("ratio_unit")
+    meas_ok, meas_results, numeric_hits = ocr_eval.evaluate_measurements(
+        ocr_clean,
+        lows,
+        highs,
+        unit=unit,
+        other_unit=case.get("ratio_unit") or "",
     )
-
-    meas_results = []
-    meas_ok = True
-
-    if not lows and not highs:
-        pass  # 임계 없음 — meas 검증 skip
-    elif len(lows) != len(highs):
-        meas_results.append(
-            f"임계 low/high 개수 불일치: low={len(lows)} high={len(highs)}"
-        )
-        meas_ok = False
-    else:
-        n_thresh = len(lows)
-        n_hit = len(numeric_hits)
-        if n_thresh == 1:
-            low, high = lows[0], highs[0]
-            pass_count = 0
-            for t, v in numeric_hits:
-                if low <= v <= high:
-                    pass_count += 1
-                    meas_results.append(f"'{t}' -> PASS")
-                else:
-                    meas_results.append(f"'{t}' -> FAIL (range {low}~{high})")
-            if pass_count == 0:
-                meas_ok = False
-        elif n_thresh == n_hit:
-            for (t, v), low, high in zip(numeric_hits, lows, highs):
-                if low <= v <= high:
-                    meas_results.append(f"'{t}' -> PASS (range {low}~{high})")
-                else:
-                    meas_results.append(f"'{t}' -> FAIL (range {low}~{high})")
-                    meas_ok = False
-        else:
-            meas_results.append(
-                f"임계 {n_thresh} 개 ≠ OCR 매치 {n_hit} 개 (단위='{unit}')"
-            )
-            meas_ok = False
 
     # 3) ratio — 텍스트 매칭 우선, 비면 숫자 범위로
     ratio_results = []
@@ -345,47 +309,15 @@ def _eval_demo_case(case: dict, ocr_texts: list) -> dict:
     ratio_lows = list(case.get("ratio_low") or [])
     ratio_highs = list(case.get("ratio_high") or [])
 
-    if ratio_text:
-        ratio_ok, ratio_results = ocr_eval.match_ratio_texts(ratio_text, ocr_clean)
-    elif ratio_lows or ratio_highs:
-        r_unit = (case.get("ratio_unit") or "")
-        if isinstance(r_unit, str):
-            r_unit = r_unit.strip()
-        # meas 와 동일 위치 기반 매칭. other_unit=meas_unit 으로 분리 숫자
-        # 충돌 방지.
-        r_hits = ocr_eval.collect_unit_hits(ocr_clean, r_unit, case.get("meas_unit"))
-
-        if len(ratio_lows) != len(ratio_highs):
-            ratio_results.append(
-                f"ratio low/high 개수 불일치: low={len(ratio_lows)} high={len(ratio_highs)}"
-            )
-            ratio_ok = False
-        else:
-            n_thresh = len(ratio_lows)
-            n_hit = len(r_hits)
-            if n_thresh == 1:
-                low, high = ratio_lows[0], ratio_highs[0]
-                pass_count = 0
-                for t, v in r_hits:
-                    if low <= v <= high:
-                        pass_count += 1
-                        ratio_results.append(f"ratio '{t}' -> PASS")
-                    else:
-                        ratio_results.append(f"ratio '{t}' -> FAIL (range {low}~{high})")
-                if pass_count == 0:
-                    ratio_ok = False
-            elif n_thresh == n_hit:
-                for (t, v), low, high in zip(r_hits, ratio_lows, ratio_highs):
-                    if low <= v <= high:
-                        ratio_results.append(f"ratio '{t}' -> PASS (range {low}~{high})")
-                    else:
-                        ratio_results.append(f"ratio '{t}' -> FAIL (range {low}~{high})")
-                        ratio_ok = False
-            else:
-                ratio_results.append(
-                    f"ratio 임계 {n_thresh} 개 ≠ OCR 매치 {n_hit} 개 (단위='{r_unit}')"
-                )
-                ratio_ok = False
+    if ratio_text or ratio_lows or ratio_highs:
+        ratio_ok, ratio_results, _ratio_hits = ocr_eval.evaluate_ratio(
+            ocr_clean,
+            ratio_text=ratio_text,
+            ratio_lows=ratio_lows,
+            ratio_highs=ratio_highs,
+            ratio_unit=case.get("ratio_unit") or "",
+            other_unit=case.get("meas_unit") or "",
+        )
     # else: ratio 검증 skip
 
     # 4) timestamp — 개수 + reset_time 이후
