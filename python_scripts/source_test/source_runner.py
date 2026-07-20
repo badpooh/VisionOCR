@@ -336,6 +336,32 @@ class SourceTestRunner:
             rows.append(self._read_measurement_check(case, output, check))
         return rows
 
+    def _refresh_measurement_access(
+        self, case: dict, address: int, word_count: int
+    ):
+        """Refresh a setup value through its access block before readback."""
+        client = self.connect_manager.setup_client
+        for setting in case.get("setup_modbus") or []:
+            if setting.get("address") != address:
+                continue
+
+            access_addr = setting.get("access_address")
+            if access_addr is None:
+                return
+
+            count = max(1, (address + word_count) - access_addr)
+            self.log(
+                f"[measurement_modbus] refresh access "
+                f"doc_addr={setting.get('doc_access_address')} count={count}"
+            )
+            response = client.read_holding_registers(access_addr, count=count)
+            if response is None or (
+                hasattr(response, "isError") and response.isError()
+            ):
+                raise RuntimeError(f"access refresh failed: {response}")
+            time.sleep(0.1)
+            return
+
     def _read_measurement_check(self, case, output, check) -> dict:
         client = self.connect_manager.setup_client
         doc_address = check.get("doc_address")
@@ -360,6 +386,7 @@ class SourceTestRunner:
                 f"[measurement_modbus] {check.get('check_name')} "
                 f"doc_addr={doc_address} type={value_type}"
             )
+            self._refresh_measurement_access(case, address, word_count)
             response = client.read_holding_registers(address, count=word_count)
             if response is None or (
                 hasattr(response, "isError") and response.isError()
