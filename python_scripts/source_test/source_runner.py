@@ -712,7 +712,7 @@ class SourceTestRunner:
                 limit = _percent_limit(float(expected), check.get("tolerance"))
                 numeric_ok = abs(error) <= limit
 
-        unit_ok = (not unit) or (unit in joined)
+        unit_ok = ocr_eval.contains_unit(tokens, unit)
         overall = "PASS" if label_ok and numeric_ok and unit_ok else "FAIL"
         return {
             "tc_id": case.get("tc_id"),

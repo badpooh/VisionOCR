@@ -30,17 +30,17 @@ def first_number(text: str):
 
 
 def collect_unit_hits(ocr_clean: list, target_unit: str, other_unit: str = "") -> list:
-    target = str(target_unit or "").strip()
-    other = str(other_unit or "").strip()
+    targets = unit_options(target_unit)
+    others = unit_options(other_unit)
 
     target_idx = []
     other_idx = []
-    if target or other:
+    if targets or others:
         for idx, token in enumerate(ocr_clean):
             text = str(token).strip()
-            if target and text == target:
+            if text in targets:
                 target_idx.append(idx)
-            elif other and text == other:
+            elif text in others:
                 other_idx.append(idx)
 
     hits = []
@@ -53,10 +53,10 @@ def collect_unit_hits(ocr_clean: list, target_unit: str, other_unit: str = "") -
         if value is None:
             continue
 
-        if not target:
+        if not targets:
             hits.append((text, value))
             continue
-        if unit == target:
+        if unit in targets:
             hits.append((text, value))
             continue
         if unit:
@@ -72,12 +72,32 @@ def collect_unit_hits(ocr_clean: list, target_unit: str, other_unit: str = "") -
 
 
 def measurement_number(tokens: list[str], unit: str):
-    hits = collect_unit_hits(clean_tokens(tokens), unit)
+    clean = clean_tokens(tokens)
+    hits = collect_unit_hits(clean, unit)
     if hits:
         return hits[0][1]
 
-    joined = " ".join(clean_tokens(tokens))
+    # A unit was explicitly requested, so selecting the first unrelated number
+    # (for example, a ratio shown earlier on the same row) would be misleading.
+    if unit_options(unit):
+        return None
+
+    joined = " ".join(clean)
     return first_number(joined)
+
+
+def contains_unit(tokens: list[str], unit: str) -> bool:
+    options = unit_options(unit)
+    if not options:
+        return True
+
+    for token in clean_tokens(tokens):
+        if token in options:
+            return True
+        _value, parsed_unit = parse_numeric(token)
+        if parsed_unit in options:
+            return True
+    return False
 
 
 def extract_timestamps(ocr_texts: list):
@@ -100,7 +120,11 @@ def fixed_text_tokens(
     ignored_norms: set[str] | None = None,
 ) -> list[str]:
     out = []
-    units = {str(unit).strip() for unit in (units or set()) if str(unit).strip()}
+    units = {
+        option
+        for unit in (units or set())
+        for option in unit_options(unit)
+    }
     ignored_norms = set(ignored_norms or set())
     first_measurement_idx = first_measurement_index(ocr_tokens)
 
@@ -127,7 +151,11 @@ def match_fixed_texts(
     ocr_texts: list,
     units: set[str] | None = None,
 ) -> tuple[bool, list[str]]:
-    units = {str(unit).strip() for unit in (units or set()) if str(unit).strip()}
+    units = {
+        option
+        for unit in (units or set())
+        for option in unit_options(unit)
+    }
     ocr_slots = [
         {"text": str(text).strip(), "used": False}
         for text in ocr_texts
@@ -311,6 +339,11 @@ def ratio_text_option_set(ratio_text: list) -> set[str]:
 
 def text_options(spec: str) -> list[str]:
     return [part.strip() for part in str(spec).split("|") if part.strip()]
+
+
+def unit_options(spec: str) -> list[str]:
+    """Return explicitly allowed unit spellings separated by ``|``."""
+    return text_options(spec)
 
 
 def normalize_match_text(text: str) -> str:
