@@ -13,6 +13,7 @@ SETUP_HEADERS = [
 CMC_HEADERS = [
     "TC_ID", "Order", "Name", "Duration(s)",
     "Va", "Vb", "Vc", "Ia", "Ib", "Ic", "Frequency", "Notes",
+    "Va_deg", "Vb_deg", "Vc_deg", "Ia_deg", "Ib_deg", "Ic_deg",
 ]
 MEASUREMENT_MODBUS_HEADERS = [
     "TC_ID", "Source Name", "Order", "Check Name", "Address",
@@ -147,6 +148,7 @@ def save_sequence(path: str, cases: list[dict]):
                 item.get("notes", ""),
             ])
         for item in case.get("cmc_outputs", []):
+            voltage_phases, current_phases = _cmc_phase_lists(item)
             cmc.append([
                 tc_id,
                 item.get("order", ""),
@@ -160,6 +162,8 @@ def save_sequence(path: str, cases: list[dict]):
                 item.get("ic", ""),
                 item.get("frequency", ""),
                 item.get("notes", ""),
+                *voltage_phases,
+                *current_phases,
             ])
         for item in case.get("measurement_modbus", []):
             measurement.append([
@@ -280,7 +284,33 @@ def _cmc_from_row(row: dict) -> dict:
         "ic": _float(row.get("Ic"), 0),
         "frequency": _float(row.get("Frequency"), 60),
         "notes": _text(row, "Notes"),
+        "phases": {
+            "voltage": [
+                _float(row.get("Va_deg"), 0),
+                _float(row.get("Vb_deg"), 240),
+                _float(row.get("Vc_deg"), 120),
+            ],
+            "current": [
+                _float(row.get("Ia_deg"), 0),
+                _float(row.get("Ib_deg"), 240),
+                _float(row.get("Ic_deg"), 120),
+            ],
+        },
     }
+
+
+def _cmc_phase_lists(item: dict) -> tuple[list[float], list[float]]:
+    defaults = [0, 240, 120]
+    phases = item.get("phases") or {}
+
+    def triplet(name: str) -> list[float]:
+        values = phases.get(name) or []
+        return [
+            _float(values[index] if index < len(values) else None, default)
+            for index, default in enumerate(defaults)
+        ]
+
+    return triplet("voltage"), triplet("current")
 
 
 def _measurement_modbus_from_row(row: dict) -> dict:
